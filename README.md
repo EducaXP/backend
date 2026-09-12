@@ -46,7 +46,30 @@ SQLite usa um arquivo local com WAL. Durante o desenvolvimento em uma pasta sinc
 | Participação sem celular | Professor registra a mesma entrega pelo canal `teacher_mediated`, com reconhecimento equivalente |
 | Mediação | Pedidos de ajuda e respostas, combinado de pausa e contagens de entregas pendentes |
 | Personalização | Catálogo cosmético, preferência de economia de animações e XP concedido pelo professor |
-| Planejamento | Modelo determinístico local e editável, sem chamada a IA e sem validação automática da BNCC |
+| Planejamento | Modelo local editável e assistente de IA configurável com revisão, autorização e limites; sem validação automática da BNCC |
+
+## Ativar o assistente de IA
+
+O [assistente docente](../docs/decisions/0003-assistente-ia.md) usa OpenRouter ou uma API compatível com Chat Completions e respostas estruturadas. No recurso **backend** do Coolify, configure estas variáveis de execução e faça o redeploy com o código atualizado:
+
+~~~dotenv
+AI_PROVIDER=openrouter
+AI_BASE_URL=https://openrouter.ai/api/v1
+AI_MODEL=identificador-do-modelo-escolhido
+AI_API_KEY=sua-chave-do-provedor
+~~~
+
+Os valores de modelo e chave acima são placeholders. Use o identificador completo do modelo no provedor e confirme suporte a JSON Schema estruturado. Não há modelo padrão para evitar escolher custo e qualidade implicitamente. Não envie a chave no chat nem coloque essas variáveis no frontend. Faça também o deploy do frontend atualizado para disponibilizar o painel.
+
+Para outro serviço, use AI_PROVIDER=compatible e AI_BASE_URL com sua URL base HTTPS, sem /chat/completions, parâmetros de consulta ou credenciais. A URL é definida pela administração no servidor; o navegador não escolhe o destino. Parâmetros exclusivos do OpenRouter são omitidos nesse modo.
+
+Sem AI_API_KEY, o assistente fica desativado e o planejamento local continua disponível. Com chave mas modelo/configuração inválidos, o servidor interrompe a inicialização com mensagem de configuração. enabled=true informa configuração presente; não verifica saldo, validade da chave ou disponibilidade do modelo.
+
+Para conferir após o deploy: entre como professor, abra **Criar missão**, informe o contexto do editor e envie um pedido em **Criar com IA**. A proposta deve aparecer separada do rascunho. Peça um ajuste, aplique a proposta e revise antes de publicar. Essa verificação usa o provedor e pode consumir créditos.
+
+O backend envia apenas o contexto de planejamento autorizado, incluindo o rascunho e até oito mensagens. O adaptador usa fetch nativo, sem dependência adicional, sem ferramentas externas e sem repetição automática. No OpenRouter solicita require_parameters=true e data_collection=deny; as condições de tratamento de dados dependem das políticas do serviço. O endpoint exige permissão docente e vínculo com a turma.
+
+Limites: 12 pedidos/hora por professor, um simultâneo por professor, três por processo, 45 segundos, saída de até 6.000 tokens e resposta HTTP de até 128 KiB. Falhas preservam o rascunho. Contadores reiniciam com o processo e não substituem um teto de gastos na conta do provedor. Os testes exercitam o adaptador com transporte simulado; nenhuma chamada a modelo real foi executada nesta validação.
 
 ## Verificação
 
@@ -84,7 +107,7 @@ docs/API.md              Contrato e integração com o frontend
 ## Limites desta primeira implementação
 
 - A [PWA integrada](../frontend/README.md) implementa fila offline, cache de missões, resolução visual de conflitos e troca de perfil. Consulte seus limites de armazenamento e compatibilidade antes de um piloto.
-- Não há IA generativa, correção automática, códigos BNCC pré-validados, upload de mídia, notificações push, WebSockets, exportação para diário de classe ou painel de gestão escolar.
+- Não há correção automática, códigos BNCC pré-validados, upload de mídia, notificações push, WebSockets, exportação para diário de classe ou painel de gestão escolar.
 - A evidência é textual. Fotos e áudios do protótipo exigirão uma etapa própria de armazenamento, limites e proteção de dados.
 - As missões publicadas e avaliações já registradas são imutáveis nesta versão. Uma nova versão de entrega permite nova avaliação. Fluxo de retificação de avaliação publicada está pendente.
 - A composição dos grupos é fixa por turma no MVP; os papéis podem rodar. Transferência entre grupos, matrícula em várias turmas e movimentação de estudantes ficam para a próxima etapa.

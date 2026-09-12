@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { readAIConfig } from "./ai.js";
+
 export function loadConfig() {
   if (existsSync(".env")) process.loadEnvFile(".env");
   const port = Number(process.env.PORT ?? 3333);
@@ -10,6 +12,7 @@ export function loadConfig() {
   if (!Number.isFinite(sessionHours) || sessionHours < 1 || sessionHours > 168)
     throw new Error("SESSION_HOURS deve estar entre 1 e 168.");
   return {
+    ai: readAIConfig(process.env),
     host: process.env.HOST ?? "127.0.0.1",
     port,
     sessionHours,

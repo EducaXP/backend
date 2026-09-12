@@ -22,8 +22,11 @@ import { object, text } from "./schemas.js";
 import { classroomRoutes } from "./routes/classrooms.js";
 import { missionRoutes } from "./routes/missions.js";
 import { learningRoutes } from "./routes/learning.js";
+import { assistantRoutes } from "./routes/assistant.js";
+import type { PlanningAgent } from "./planning-agent.js";
 
 export interface AppOptions {
+  planningAgent?: PlanningAgent;
   databasePath?: string;
   logger?: boolean;
   corsOrigins?: string[];
@@ -261,6 +264,7 @@ export async function buildApp(options: AppOptions = {}) {
       classroomRoutes(secured, db);
       missionRoutes(secured, db);
       learningRoutes(secured, db);
+      assistantRoutes(secured, db, options.planningAgent);
     },
     { prefix: "/api/v1" },
   );

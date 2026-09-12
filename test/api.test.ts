@@ -7,11 +7,12 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { buildApp } from '../src/app.js';
 import { digest, hashPassword, issueSession } from '../src/auth.js';
 import { planningTemplate } from '../src/planning.js';
+import type { PlanningAgent, PlanningContext } from '../src/planning-agent.js';
 
 type HTTPMethods = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
-async function fixture(t: TestContext, databasePath?: string) {
-  const { app, db } = await buildApp({ databasePath, enableDocs: true, rateLimitMax: 1000, corsOrigins: ['http://localhost:5173'] });
+async function fixture(t: TestContext, databasePath?: string, planningAgent?: PlanningAgent) {
+  const { app, db } = await buildApp({ databasePath, planningAgent, enableDocs: true, rateLimitMax: 1000, corsOrigins: ['http://localhost:5173'] });
   t.after(() => app.close());
   const school = randomUUID(), otherSchool = randomUUID();
   db.run('INSERT INTO schools VALUES(?,?)', school, 'Escola fictícia');
@@ -307,4 +308,80 @@ test('rotação de papéis mantém integrantes e não permite trocar o destinat�
   ] })).statusCode, 422);
   const groups = await f.ok('GET', `/classrooms/${f.classroom.id}/groups`, f.bia.token);
   assert.equal(groups.items[0].members.find((m: { id: string }) => m.id === f.bia.id).role, 'Investigar');
+});
+
+
+const planningRequest = (classroomId: string) => ({ classroomId, instruction: 'Crie uma atividade de porcentagem em equipes.', subject: 'Matemática', schoolYear: '9º ano', durationMinutes: 30, resources: 'Papel e um celular por equipe', history: [] });
+
+test('assistente desativado preserva o planejamento local e exige acesso docente', async t => {
+  const f = await fixture(t);
+  assert.deepEqual(await f.ok('GET', '/planning/assistant/status', f.maria.token), { enabled: false });
+  assert.equal((await f.send('GET', '/planning/assistant/status', f.enzo.token)).statusCode, 403);
+  const response = await f.send('POST', '/planning/assistant', f.maria.token, planningRequest(f.classroom.id));
+  assert.equal(response.statusCode, 503);
+  assert.match(response.body, /AI_NOT_CONFIGURED/);
+});
+
+test('assistente isola turmas, limita contexto e retorna proposta sem publicar missão', async t => {
+  const received: PlanningContext[] = [];
+  const f = await fixture(t, undefined, async context => {
+    received.push(context);
+    return { reply: 'Proposta simulada para teste.', content: planningTemplate({ ...context, theme: 'porcentagem' }) };
+  });
+  const body = { ...planningRequest(f.classroom.id), currentDraft: f.content };
+  assert.equal((await f.send('POST', '/planning/assistant', f.enzo.token, body)).statusCode, 403);
+  assert.equal((await f.send('POST', '/planning/assistant', f.otherTeacher.token, body)).statusCode, 404);
+  assert.equal((await f.send('POST', '/planning/assistant', f.external.token, body)).statusCode, 404);
+  assert.equal(received.length, 0);
+  const result = await f.ok('POST', '/planning/assistant', f.maria.token, body);
+  assert.equal(result.requiresTeacherReview, true);
+  assert.equal(result.bnccVerification, 'pending');
+  assert.equal(result.content.bnccReference, undefined);
+  assert.ok(received[0]);
+  assert.deepEqual(Object.keys(received[0]).sort(), ['currentDraft','durationMinutes','history','instruction','resources','schoolYear','subject']);
+  assert.equal((await f.ok('GET', '/classrooms/' + f.classroom.id + '/missions', f.maria.token)).items.length, 1);
+  const excessive = { ...body, history: Array.from({length: 9}, () => ({role: 'user', content: 'teste'})) };
+  assert.equal((await f.send('POST', '/planning/assistant', f.maria.token, excessive)).statusCode, 400);
+  assert.equal(received.length, 1);
+});
+
+test('assistente recusa respostas incompletas, critérios repetidos e BNCC não verificada', async t => {
+  let result: unknown;
+  const f = await fixture(t, undefined, async () => result);
+  for (const invalid of [
+    { reply: 'Incompleto', content: {} },
+    { reply: 'BNCC inventada', content: { ...f.content, bnccReference: { code: 'FALSO', sourceUrl: 'https://example.com' } } },
+    { reply: 'Critérios duplicados', content: { ...f.content, rubric: [f.content.rubric[0], f.content.rubric[0]] } },
+    { reply: 'Somente tela', content: { ...f.content, steps: f.content.steps.map(s => ({ ...s, mode: 'screen' })) } },
+  ]) {
+    result = invalid;
+    const response = await f.send('POST', '/planning/assistant', f.maria.token, planningRequest(f.classroom.id));
+    assert.equal(response.statusCode, 502, response.body);
+    assert.match(response.body, /AI_INVALID_RESPONSE/);
+  }
+});
+
+test('assistente limita custo e impede pedidos simultâneos do mesmo professor', async t => {
+  let finish!: (value: unknown) => void;
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  let hold = true, calls = 0;
+  const f = await fixture(t, undefined, async context => {
+    calls++;
+    if (hold) { entered(); return new Promise(resolve => { finish = resolve; }); }
+    return { reply: 'Proposta de teste', content: planningTemplate({ ...context, theme: 'teste' }) };
+  });
+  const body = planningRequest(f.classroom.id);
+  const first = f.send('POST', '/planning/assistant', f.maria.token, body).then(result => result);
+  await started;
+  assert.equal((await f.send('POST', '/planning/assistant', f.maria.token, body)).statusCode, 429);
+  finish({ reply: 'Proposta de teste', content: f.content });
+  assert.equal((await first).statusCode, 200);
+  hold = false;
+  for (let i = 1; i < 12; i++) await f.ok('POST', '/planning/assistant', f.maria.token, body);
+  const limited = await f.send('POST', '/planning/assistant', f.maria.token, body);
+  assert.equal(limited.statusCode, 429);
+  assert.match(limited.body, /AI_BUDGET_REACHED/);
+  assert.ok(Number(limited.headers['retry-after']) > 0);
+  assert.equal(calls, 12);
 });

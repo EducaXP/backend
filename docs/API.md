@@ -130,3 +130,14 @@ Com `recognizeParticipation:true`, cada integrante recebe 100 XP uma única vez 
 - Avatar: `/me/avatar`. Substituir cristais por permanência online pelo reconhecimento pedagógico documentado. Não exibir ranking, sequências obrigatórias ou níveis já preenchidos com dados fictícios.
 
 Nesta etapa o painel atualiza por requisição HTTP. Quando implementado no frontend, usar atualização manual ou consulta moderada, interrompendo-a sem rede. Não criar telemetria de presença para simular “tempo real”.
+
+
+## Assistente de planejamento
+
+GET /planning/assistant/status exige professor e retorna {enabled:boolean}. Indica configuração presente; não consulta saldo ou disponibilidade do modelo.
+
+POST /planning/assistant exige professor responsável pela turma. Corpo: classroomId, instruction (até 4.000 caracteres), subject, schoolYear, durationMinutes (1–240), resources (até 1.500), currentDraft opcional (MissionContent sem bnccReference) e history opcional (até oito objetos {role: user|assistant, content}, 3.000 caracteres por mensagem).
+
+Retorno: {mode:"ai", requiresTeacherReview:true, bnccVerification:"pending", reply, content}. A operação apenas propõe conteúdo; não salva nem publica missão. A interface pode aplicar content ao editor e usar as rotas normais após revisão docente. O identificador da turma é usado na autorização e excluído do contexto enviado ao agente.
+
+Falhas: 503 AI_NOT_CONFIGURED, AI_CONFIGURATION_ERROR, AI_CREDITS_REQUIRED, AI_MODEL_UNAVAILABLE ou AI_PROVIDER_BUSY; 502 AI_INVALID_RESPONSE/AI_UNAVAILABLE; 504 AI_TIMEOUT; 413 AI_CONTEXT_TOO_LARGE; 429 AI_BUSY ou AI_BUDGET_REACHED (este último inclui Retry-After). Há também erros usuais de autenticação, autorização e validação. Não repetir geração automaticamente. Ver [limites e configuração](../README.md#ativar-o-assistente-de-ia).
