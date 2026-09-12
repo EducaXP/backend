@@ -53,15 +53,15 @@ try {
       name: "Enzo (fictício)",
       alias: "enzo",
     });
-    const bia = await post(`/classrooms/${classroom.id}/students`, {
-      name: "Bia (fictícia)",
-      alias: "bia",
+    const valentina = await post(`/classrooms/${classroom.id}/students`, {
+      name: "Valentina (fictícia)",
+      alias: "valentina",
     });
     await post(`/classrooms/${classroom.id}/groups`, {
       name: "Equipe Ipê",
       members: [
         { studentId: enzo.id, role: "Investigação" },
-        { studentId: bia.id, role: "Registro e apresentação" },
+        { studentId: valentina.id, role: "Registro e apresentação" },
       ],
     });
     const mission = await post(
@@ -92,7 +92,7 @@ try {
           classroom: { id: classroom.id, classCode: classroom.joinCode },
           students: [
             { alias: "enzo", pin: enzo.pin },
-            { alias: "bia", pin: bia.pin },
+            { alias: "valentina", pin: valentina.pin },
           ],
           missionId: mission.id,
         },

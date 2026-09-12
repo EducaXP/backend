@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { test, type TestContext } from "node:test";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { buildTestApp as buildApp } from "./support.js";
+import { test, type TestContext } from "node:test";
 import { digest, hashPassword, issueSession } from "../src/auth.js";
-import { planningTemplate } from "../src/planning.js";
 import type { PlanningAgent, PlanningContext } from "../src/planning-agent.js";
+import { planningTemplate } from "../src/planning.js";
+import { buildTestApp as buildApp } from "./support.js";
 type HTTPMethods = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 async function fixture(
   t: TestContext,
@@ -95,7 +95,7 @@ async function fixture(
     return { ...user, token: (await issueSession(db, user.id, 12)).token };
   };
   const enzo = await createStudent("enzo"),
-    bia = await createStudent("bia"),
+    valentina = await createStudent("valentina"),
     lucas = await createStudent("lucas");
   const group = await ok(
     "POST",
@@ -105,7 +105,7 @@ async function fixture(
       name: "Ipê",
       members: [
         { studentId: enzo.id, role: "Investigar" },
-        { studentId: bia.id, role: "Registrar" },
+        { studentId: valentina.id, role: "Registrar" },
       ],
     },
     201,
@@ -164,7 +164,7 @@ async function fixture(
     classroom,
     otherClass,
     enzo,
-    bia,
+    valentina,
     lucas,
     group,
     otherGroup,
@@ -182,7 +182,7 @@ test("ciclo pedagógico completo: entrega, avaliação humana, recompensa equiva
   const viewed = await f.ok(
     "GET",
     `/submissions/${body.submissionId}`,
-    f.bia.token,
+    f.valentina.token,
   );
   assert.equal(viewed.evidence, body.evidence);
   assert.equal(viewed.evaluation, null);
@@ -193,7 +193,7 @@ test("ciclo pedagógico completo: entrega, avaliação humana, recompensa equiva
     f.evaluation(),
   );
   assert.equal(review.awardedStudents, 2);
-  for (const member of [f.enzo, f.bia]) {
+  for (const member of [f.enzo, f.valentina]) {
     assert.equal((await f.ok("GET", "/me/avatar", member.token)).xp, 100);
   }
   await f.ok("PUT", "/me/avatar", f.enzo.token, {
@@ -233,11 +233,11 @@ test("login docente e estudantil, logout e expiração da sessão", async (t) =>
   assert.equal((await f.send("POST", "/auth/logout", token)).statusCode, 204);
   assert.equal((await f.send("GET", "/me", token)).statusCode, 401);
   await dbExpire();
-  assert.equal((await f.send("GET", "/me", f.bia.token)).statusCode, 401);
+  assert.equal((await f.send("GET", "/me", f.valentina.token)).statusCode, 401);
   async function dbExpire() {
     await f.db.run(
       "UPDATE sessions SET expires_at=0 WHERE token_hash=$1",
-      digest(f.bia.token),
+      digest(f.valentina.token),
     );
   }
   assert.equal((await f.send("GET", "/classrooms")).statusCode, 401);
@@ -355,7 +355,7 @@ test("grupos isolam entregas e pedidos de ajuda, incluindo estudantes na mesma t
     answer: "Observem a unidade usada em cada medição.",
   });
   assert.ok(
-    (await f.ok("GET", `/classrooms/${f.classroom.id}/help`, f.bia.token))
+    (await f.ok("GET", `/classrooms/${f.classroom.id}/help`, f.valentina.token))
       .items[0].resolvedAt,
   );
 });
@@ -453,7 +453,7 @@ test("edições concorrentes retornam a versão atual, sem perda de histórico",
   };
   const responses = await Promise.all([
     f.send("POST", "/sync/submissions", f.enzo.token, next),
-    f.send("POST", "/sync/submissions", f.bia.token, competing),
+    f.send("POST", "/sync/submissions", f.valentina.token, competing),
   ]);
   assert.deepEqual(responses.map((r) => r.statusCode).sort(), [200, 409]);
   const conflict = responses.find((r) => r.statusCode === 409)!.json();
@@ -542,7 +542,7 @@ test("avaliação exige docente, versão atual e critérios válidos; recompensa
   );
   const result = await f.ok("POST", path, f.maria.token, f.evaluation(2));
   assert.equal(result.awardedStudents, 0);
-  assert.equal((await f.ok("GET", "/me/avatar", f.bia.token)).xp, 100);
+  assert.equal((await f.ok("GET", "/me/avatar", f.valentina.token)).xp, 100);
 });
 test("sem reconhecimento explícito não há XP; cliente não desbloqueia item por conta própria", async (t) => {
   const f = await fixture(t),
@@ -712,8 +712,8 @@ test("limite de tentativas por conta não bloqueia colegas no mesmo Wi-Fi", asyn
     (
       await f.send("POST", "/auth/student-session", undefined, {
         classCode: f.classroom.joinCode,
-        alias: "bia",
-        pin: f.bia.pin,
+        alias: "valentina",
+        pin: f.valentina.pin,
       })
     ).statusCode,
     200,
@@ -796,7 +796,7 @@ test("rotação de papéis mantém integrantes e não permite trocar o destinat�
   await f.ok("PUT", `/groups/${f.group.id}/roles`, f.maria.token, {
     members: [
       { studentId: f.enzo.id, role: "Registrar" },
-      { studentId: f.bia.id, role: "Investigar" },
+      { studentId: f.valentina.id, role: "Investigar" },
     ],
   });
   assert.equal(
@@ -813,10 +813,11 @@ test("rotação de papéis mantém integrantes e não permite trocar o destinat�
   const groups = await f.ok(
     "GET",
     `/classrooms/${f.classroom.id}/groups`,
-    f.bia.token,
+    f.valentina.token,
   );
   assert.equal(
-    groups.items[0].members.find((m: { id: string }) => m.id === f.bia.id).role,
+    groups.items[0].members.find((m: { id: string }) => m.id === f.valentina.id)
+      .role,
     "Investigar",
   );
 });
@@ -1097,11 +1098,16 @@ test("investigação exige respostas exatas, preserva histórico e idempotência
     answers: answers.map((a) => ({ ...a, text: "Revisamos nossa evidência." })),
   };
   await f.ok("POST", "/sync/submissions", f.enzo.token, edited);
-  const conflict = await f.send("POST", "/sync/submissions", f.bia.token, {
-    ...op,
-    operationId: randomUUID(),
-    baseVersion: 1,
-  });
+  const conflict = await f.send(
+    "POST",
+    "/sync/submissions",
+    f.valentina.token,
+    {
+      ...op,
+      operationId: randomUUID(),
+      baseVersion: 1,
+    },
+  );
   assert.equal(conflict.statusCode, 409);
   assert.deepEqual(
     conflict.json().error.details.current.answers,
