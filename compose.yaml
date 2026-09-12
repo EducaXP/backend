@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: educaxp
       POSTGRES_USER: educaxp
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD para iniciar o banco local}
+      POSTGRES_PASSWORD: educaxp
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
