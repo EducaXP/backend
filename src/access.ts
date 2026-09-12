@@ -7,12 +7,14 @@ import {
   type MissionRow,
   type SubmissionRow,
 } from "./domain.js";
-
-export function classroomAccess(db: Store, user: User, id: string): Classroom {
+export async function classroomAccess(
+  db: Store,
+  user: User,
+  id: string,
+): Promise<Classroom> {
   return requireFound(
-    db.get<Classroom>(
-      `SELECT c.* FROM classrooms c WHERE c.id=? AND c.school_id=? AND
-    (c.teacher_id=? OR EXISTS(SELECT 1 FROM memberships m WHERE m.classroom_id=c.id AND m.user_id=?))`,
+    await db.get<Classroom>(
+      "SELECT c.* FROM classrooms c WHERE c.id=$1 AND c.school_id=$2 AND\n    (c.teacher_id=$3 OR EXISTS(SELECT 1 FROM memberships m WHERE m.classroom_id=c.id AND m.user_id=$4))",
       id,
       user.school_id,
       user.id,
@@ -20,15 +22,19 @@ export function classroomAccess(db: Store, user: User, id: string): Classroom {
     ),
   );
 }
-export function groupAccess(db: Store, user: User, id: string): Group {
+export async function groupAccess(
+  db: Store,
+  user: User,
+  id: string,
+): Promise<Group> {
   const group = requireFound(
-    db.get<Group>("SELECT * FROM groups WHERE id=?", id),
+    await db.get<Group>("SELECT * FROM groups WHERE id=$1", id),
   );
-  const classroom = classroomAccess(db, user, group.classroom_id);
+  const classroom = await classroomAccess(db, user, group.classroom_id);
   if (classroom.teacher_id !== user.id) {
     requireFound(
-      db.get(
-        "SELECT 1 FROM group_members WHERE group_id=? AND user_id=?",
+      await db.get(
+        "SELECT 1 FROM group_members WHERE group_id=$1 AND user_id=$2",
         id,
         user.id,
       ),
@@ -36,24 +42,28 @@ export function groupAccess(db: Store, user: User, id: string): Group {
   }
   return group;
 }
-export function missionAccess(db: Store, user: User, id: string): MissionRow {
+export async function missionAccess(
+  db: Store,
+  user: User,
+  id: string,
+): Promise<MissionRow> {
   const mission = requireFound(
-    db.get<MissionRow>("SELECT * FROM missions WHERE id=?", id),
+    await db.get<MissionRow>("SELECT * FROM missions WHERE id=$1", id),
   );
-  classroomAccess(db, user, mission.classroom_id);
+  await classroomAccess(db, user, mission.classroom_id);
   if (user.role === "student" && mission.status === "draft")
     requireFound(undefined);
   return mission;
 }
-export function submissionAccess(
+export async function submissionAccess(
   db: Store,
   user: User,
   id: string,
-): SubmissionRow {
+): Promise<SubmissionRow> {
   const submission = requireFound(
-    db.get<SubmissionRow>("SELECT * FROM submissions WHERE id=?", id),
+    await db.get<SubmissionRow>("SELECT * FROM submissions WHERE id=$1", id),
   );
-  groupAccess(db, user, submission.group_id);
-  missionAccess(db, user, submission.mission_id);
+  await groupAccess(db, user, submission.group_id);
+  await missionAccess(db, user, submission.mission_id);
   return submission;
 }

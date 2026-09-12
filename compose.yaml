@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: educaxp
+      POSTGRES_USER: educaxp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD para iniciar o banco local}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - educaxp_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U educaxp -d educaxp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+volumes:
+  educaxp_pg_data:

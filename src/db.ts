@@ -1,122 +1,124 @@
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import pg from "pg";
+import { migrations } from "./migrations.js";
 
-const migrations = [
-  `CREATE TABLE schools (id TEXT PRIMARY KEY, name TEXT NOT NULL);
-   CREATE TABLE users (
-     id TEXT PRIMARY KEY, school_id TEXT NOT NULL REFERENCES schools(id),
-     role TEXT NOT NULL CHECK(role IN ('teacher','student')),
-     name TEXT NOT NULL, login TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
-     avatar_item TEXT NOT NULL DEFAULT 'basic', eco_mode INTEGER NOT NULL DEFAULT 1
-   );
-   CREATE TABLE sessions (
-     token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at INTEGER NOT NULL
-   );
-   CREATE TABLE classrooms (
-     id TEXT PRIMARY KEY, school_id TEXT NOT NULL REFERENCES schools(id),
-     teacher_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
-     join_code TEXT NOT NULL UNIQUE, paused INTEGER NOT NULL DEFAULT 0
-   );
-   CREATE TABLE memberships (
-     classroom_id TEXT NOT NULL REFERENCES classrooms(id), user_id TEXT NOT NULL REFERENCES users(id),
-     alias TEXT NOT NULL, PRIMARY KEY(classroom_id,user_id), UNIQUE(classroom_id,alias)
-   );
-   CREATE TABLE groups (
-     id TEXT PRIMARY KEY, classroom_id TEXT NOT NULL REFERENCES classrooms(id), name TEXT NOT NULL
-   );
-   CREATE TABLE group_members (
-     group_id TEXT NOT NULL REFERENCES groups(id), classroom_id TEXT NOT NULL,
-     user_id TEXT NOT NULL, role TEXT NOT NULL,
-     PRIMARY KEY(group_id,user_id), UNIQUE(classroom_id,user_id),
-     FOREIGN KEY(classroom_id,user_id) REFERENCES memberships(classroom_id,user_id)
-   );
-   CREATE TABLE missions (
-     id TEXT PRIMARY KEY, classroom_id TEXT NOT NULL REFERENCES classrooms(id),
-     status TEXT NOT NULL CHECK(status IN ('draft','published','closed')) DEFAULT 'draft',
-     version INTEGER NOT NULL DEFAULT 1, content TEXT NOT NULL, created_at TEXT NOT NULL
-   );
-   CREATE TABLE submissions (
-     id TEXT PRIMARY KEY, mission_id TEXT NOT NULL REFERENCES missions(id),
-     group_id TEXT NOT NULL REFERENCES groups(id), version INTEGER NOT NULL,
-     content TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(mission_id,group_id)
-   );
-   CREATE TABLE submission_revisions (
-     submission_id TEXT NOT NULL REFERENCES submissions(id), version INTEGER NOT NULL,
-     content TEXT NOT NULL, author_id TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL,
-     PRIMARY KEY(submission_id,version)
-   );
-   CREATE TABLE evaluations (
-     id TEXT PRIMARY KEY, submission_id TEXT NOT NULL REFERENCES submissions(id),
-     submission_version INTEGER NOT NULL, teacher_id TEXT NOT NULL REFERENCES users(id),
-     feedback TEXT NOT NULL, scores TEXT NOT NULL, created_at TEXT NOT NULL,
-     UNIQUE(submission_id,submission_version),
-     FOREIGN KEY(submission_id,submission_version) REFERENCES submission_revisions(submission_id,version)
-   );
-   CREATE TABLE rewards (
-     user_id TEXT NOT NULL REFERENCES users(id), mission_id TEXT NOT NULL REFERENCES missions(id),
-     xp INTEGER NOT NULL CHECK(xp >= 0), reason TEXT NOT NULL, created_at TEXT NOT NULL,
-     PRIMARY KEY(user_id,mission_id)
-   );
-   CREATE TABLE help_requests (
-     id TEXT PRIMARY KEY, group_id TEXT NOT NULL REFERENCES groups(id),
-     message TEXT NOT NULL, answer TEXT, created_at TEXT NOT NULL, resolved_at TEXT
-   );
-   CREATE TABLE operations (
-     user_id TEXT NOT NULL REFERENCES users(id), operation_id TEXT NOT NULL,
-     fingerprint TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL,
-     PRIMARY KEY(user_id,operation_id)
-   );
-   CREATE INDEX idx_sessions_expiry ON sessions(expires_at);
-   CREATE INDEX idx_classes_teacher ON classrooms(teacher_id);
-   CREATE INDEX idx_missions_class ON missions(classroom_id);
-   CREATE INDEX idx_groups_class ON groups(classroom_id);
-   CREATE INDEX idx_help_group ON help_requests(group_id);
-  `,
-];
-
+export interface Connection {
+  query(
+    sql: string,
+    values?: unknown[],
+  ): Promise<{ rows: Record<string, unknown>[]; rowCount?: number | null }>;
+  release(): void;
+}
+export interface DatabaseDriver {
+  connect(): Promise<Connection>;
+  end(): Promise<void>;
+}
+const lockId = 17420301;
 export class Store {
-  private db: DatabaseSync;
-  constructor(path: string) {
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    this.db.exec(
-      "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;",
-    );
-    const version = this.get<{ user_version: number }>(
-      "PRAGMA user_version",
-    )!.user_version;
-    if (version > migrations.length)
-      throw new Error("Banco mais recente que esta versão da aplicação.");
-    for (let i = version; i < migrations.length; i++) {
-      this.transaction(() => {
-        this.db.exec(migrations[i]!);
-        this.db.exec(`PRAGMA user_version=${i + 1}`);
-      });
+  private scope = new AsyncLocalStorage<Connection>();
+  private closed = false;
+  constructor(private driver: DatabaseDriver) {}
+  static async connect(connectionString: string) {
+    if (!/^postgres(?:ql)?:\/\//.test(connectionString))
+      throw new Error("DATABASE_URL deve ser uma URL PostgreSQL.");
+    const pool = new pg.Pool({
+      connectionString,
+      max: 10,
+      connectionTimeoutMillis: 10000,
+      idleTimeoutMillis: 30000,
+      statement_timeout: 15000,
+      idle_in_transaction_session_timeout: 30000,
+    });
+    // Connection errors must not print URLs, credentials or query parameters.
+    pool.on("error", () => {});
+    const store = new Store(pool);
+    try {
+      await store.migrate();
+      return store;
+    } catch {
+      await pool.end();
+      throw new Error(
+        "Não foi possível preparar o PostgreSQL. Confira DATABASE_URL, rede e permissões.",
+      );
     }
   }
-  get<T>(sql: string, ...params: SQLInputValue[]): T | undefined {
-    return this.db.prepare(sql).get(...params) as T | undefined;
-  }
-  all<T>(sql: string, ...params: SQLInputValue[]): T[] {
-    return this.db.prepare(sql).all(...params) as T[];
-  }
-  run(sql: string, ...params: SQLInputValue[]) {
-    return this.db.prepare(sql).run(...params);
-  }
-  // Callbacks must stay synchronous: the complete operation commits or rolls back together.
-  transaction<T>(fn: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
+  private async query(sql: string, values: unknown[]) {
+    const active = this.scope.getStore();
+    const connection = active || (await this.driver.connect());
     try {
-      const result = fn();
-      this.db.exec("COMMIT");
+      const response = await connection.query(sql, values);
+      const result = Array.isArray(response) ? response.at(-1) : response;
+      // pg returns int8 aggregates as strings; API counts and epoch milliseconds stay numeric.
+      const rows = (result?.rows || []).map((row: Record<string, unknown>) =>
+        Object.fromEntries(
+          Object.entries(row).map(([key, value]) => [
+            key,
+            typeof value === "string" &&
+            ["n", "xp", "expires_at"].includes(key) &&
+            /^\d+$/.test(value)
+              ? Number(value)
+              : value,
+          ]),
+        ),
+      );
+      return { rows, rowCount: result?.rowCount };
+    } finally {
+      if (!active) connection.release();
+    }
+  }
+  async get<T>(sql: string, ...params: unknown[]): Promise<T | undefined> {
+    return (await this.query(sql, params)).rows[0] as T | undefined;
+  }
+  async all<T>(sql: string, ...params: unknown[]): Promise<T[]> {
+    return (await this.query(sql, params)).rows as T[];
+  }
+  async run(sql: string, ...params: unknown[]) {
+    const r = await this.query(sql, params);
+    return { changes: r.rowCount ?? 0 };
+  }
+  async transaction<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.scope.getStore()) return fn();
+    const connection = await this.driver.connect();
+    try {
+      await connection.query("BEGIN");
+      // Preserve the MVP's serialized write semantics across backend instances.
+      await connection.query("SELECT pg_advisory_xact_lock($1)", [lockId]);
+      const result = await this.scope.run(connection, fn);
+      await connection.query("COMMIT");
       return result;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      await connection.query("ROLLBACK").catch(() => {});
       throw error;
+    } finally {
+      connection.release();
     }
   }
-  close() {
-    this.db.close();
+  async migrate() {
+    await this.transaction(async () => {
+      await this.run(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+      );
+      const versions = await this.all<{ version: number }>(
+        "SELECT version FROM schema_migrations ORDER BY version",
+      );
+      if (
+        versions.some((v, i) => v.version !== i + 1) ||
+        versions.length > migrations.length
+      )
+        throw new Error("Histórico de migrações incompatível.");
+      for (let i = versions.length; i < migrations.length; i++) {
+        await this.run(migrations[i]!);
+        await this.run(
+          "INSERT INTO schema_migrations(version) VALUES($1)",
+          i + 1,
+        );
+      }
+    });
+  }
+  async close() {
+    if (!this.closed) {
+      this.closed = true;
+      await this.driver.end();
+    }
   }
 }

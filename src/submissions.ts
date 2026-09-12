@@ -3,7 +3,6 @@ import { digest } from "./auth.js";
 import type { Store } from "./db.js";
 import { ApiError, now, type SubmissionRow, type User } from "./domain.js";
 import type { MissionContent, SubmissionWrite } from "./schemas.js";
-
 export const submissionView = (row: SubmissionRow) => ({
   id: row.id,
   missionId: row.mission_id,
@@ -12,8 +11,11 @@ export const submissionView = (row: SubmissionRow) => ({
   ...JSON.parse(row.content),
   updatedAt: row.updated_at,
 });
-
-export function writeSubmission(db: Store, user: User, input: SubmissionWrite) {
+export async function writeSubmission(
+  db: Store,
+  user: User,
+  input: SubmissionWrite,
+) {
   // Canonical order makes retry fingerprints independent of JSON key ordering.
   const payload = {
     submissionId: input.submissionId,
@@ -24,11 +26,18 @@ export function writeSubmission(db: Store, user: User, input: SubmissionWrite) {
     reflection: input.reflection,
     completedSteps: [...input.completedSteps].sort((a, b) => a - b),
     channel: input.channel,
+    ...(input.answers?.length
+      ? {
+          answers: input.answers
+            .map((a) => ({ questionId: a.questionId, text: a.text }))
+            .sort((a, b) => a.questionId.localeCompare(b.questionId)),
+        }
+      : {}),
   };
   const fingerprint = digest(JSON.stringify(payload));
-  return db.transaction(() => {
-    const group = groupAccess(db, user, input.groupId);
-    const mission = missionAccess(db, user, input.missionId);
+  return await db.transaction(async () => {
+    const group = await groupAccess(db, user, input.groupId);
+    const mission = await missionAccess(db, user, input.missionId);
     if (group.classroom_id !== mission.classroom_id) {
       throw new ApiError(
         422,
@@ -43,8 +52,11 @@ export function writeSubmission(db: Store, user: User, input: SubmissionWrite) {
         "O registro mediado deve ser feito pelo educador.",
       );
     }
-    const previous = db.get<{ fingerprint: string; response: string }>(
-      "SELECT fingerprint,response FROM operations WHERE user_id=? AND operation_id=?",
+    const previous = await db.get<{
+      fingerprint: string;
+      response: string;
+    }>(
+      "SELECT fingerprint,response FROM operations WHERE user_id=$1 AND operation_id=$2",
       user.id,
       input.operationId,
     );
@@ -65,6 +77,28 @@ export function writeSubmission(db: Store, user: User, input: SubmissionWrite) {
         "Publique a missão antes de receber entregas.",
       );
     const content: MissionContent = JSON.parse(mission.content);
+    const questions = content.questions || [],
+      answers = input.answers || [];
+    if (questions.length) {
+      if (
+        answers.length !== questions.length ||
+        new Set(answers.map((a) => a.questionId)).size !== questions.length ||
+        questions.some(
+          (q) => !answers.some((a) => a.questionId === q.id && a.text.trim()),
+        )
+      )
+        throw new ApiError(
+          422,
+          "INCOMPLETE_ANSWERS",
+          "Responda cada questão da investigação antes de enviar.",
+        );
+    } else if (answers.length || !input.evidence.trim()) {
+      throw new ApiError(
+        422,
+        "INVALID_EVIDENCE",
+        "Esta missão precisa de uma produção em texto e não possui questões individuais.",
+      );
+    }
     if (input.completedSteps.some((step) => step >= content.steps.length)) {
       throw new ApiError(
         422,
@@ -72,8 +106,8 @@ export function writeSubmission(db: Store, user: User, input: SubmissionWrite) {
         "A entrega contém uma etapa inexistente.",
       );
     }
-    const current = db.get<SubmissionRow>(
-      "SELECT * FROM submissions WHERE mission_id=? AND group_id=?",
+    const current = await db.get<SubmissionRow>(
+      "SELECT * FROM submissions WHERE mission_id=$1 AND group_id=$2",
       input.missionId,
       input.groupId,
     );
@@ -99,7 +133,10 @@ export function writeSubmission(db: Store, user: User, input: SubmissionWrite) {
     }
     if (
       !current &&
-      db.get("SELECT 1 FROM submissions WHERE id=?", input.submissionId)
+      (await db.get(
+        "SELECT 1 FROM submissions WHERE id=$1",
+        input.submissionId,
+      ))
     ) {
       throw new ApiError(
         409,
@@ -114,19 +151,20 @@ export function writeSubmission(db: Store, user: User, input: SubmissionWrite) {
       reflection: input.reflection,
       completedSteps: payload.completedSteps,
       channel: input.channel,
+      ...(payload.answers ? { answers: payload.answers } : {}),
       receivedAfterClosure: mission.status === "closed",
     });
     if (current) {
-      db.run(
-        "UPDATE submissions SET version=?,content=?,updated_at=? WHERE id=?",
+      await db.run(
+        "UPDATE submissions SET version=$1,content=$2,updated_at=$3 WHERE id=$4",
         nextVersion,
         evidence,
         timestamp,
         current.id,
       );
     } else {
-      db.run(
-        "INSERT INTO submissions(id,mission_id,group_id,version,content,updated_at) VALUES(?,?,?,?,?,?)",
+      await db.run(
+        "INSERT INTO submissions(id,mission_id,group_id,version,content,updated_at) VALUES($1,$2,$3,$4,$5,$6)",
         input.submissionId,
         input.missionId,
         input.groupId,
@@ -135,8 +173,8 @@ export function writeSubmission(db: Store, user: User, input: SubmissionWrite) {
         timestamp,
       );
     }
-    db.run(
-      "INSERT INTO submission_revisions(submission_id,version,content,author_id,created_at) VALUES(?,?,?,?,?)",
+    await db.run(
+      "INSERT INTO submission_revisions(submission_id,version,content,author_id,created_at) VALUES($1,$2,$3,$4,$5)",
       input.submissionId,
       nextVersion,
       evidence,
@@ -145,15 +183,15 @@ export function writeSubmission(db: Store, user: User, input: SubmissionWrite) {
     );
     const response = {
       submission: submissionView(
-        db.get<SubmissionRow>(
-          "SELECT * FROM submissions WHERE id=?",
+        (await db.get<SubmissionRow>(
+          "SELECT * FROM submissions WHERE id=$1",
           input.submissionId,
-        )!,
+        ))!,
       ),
       replayed: false,
     };
-    db.run(
-      "INSERT INTO operations(user_id,operation_id,fingerprint,response,created_at) VALUES(?,?,?,?,?)",
+    await db.run(
+      "INSERT INTO operations(user_id,operation_id,fingerprint,response,created_at) VALUES($1,$2,$3,$4,$5)",
       user.id,
       input.operationId,
       fingerprint,

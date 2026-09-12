@@ -3,13 +3,12 @@ import { buildApp } from "./app.js";
 import { hashPassword, issueSession } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { planningTemplate } from "./planning.js";
-
 const config = loadConfig();
 if (process.env.NODE_ENV === "production")
   throw new Error("O seed fictício não deve ser executado em produção.");
 const { app, db } = await buildApp(config);
 try {
-  if (db.get("SELECT 1 FROM users LIMIT 1")) {
+  if (await db.get("SELECT 1 FROM users LIMIT 1")) {
     console.log(
       "Banco já contém usuários. Nenhum dado ou credencial foi alterado.",
     );
@@ -18,14 +17,14 @@ try {
     const schoolId = randomUUID();
     const password = randomBytes(18).toString("base64url");
     const hash = await hashPassword(password);
-    db.transaction(() => {
-      db.run(
-        "INSERT INTO schools(id,name) VALUES(?,?)",
+    await db.transaction(async () => {
+      await db.run(
+        "INSERT INTO schools(id,name) VALUES($1,$2)",
         schoolId,
         "Escola Demonstração EducaXP",
       );
-      db.run(
-        "INSERT INTO users(id,school_id,role,name,login,password_hash) VALUES(?,?,?,?,?,?)",
+      await db.run(
+        "INSERT INTO users(id,school_id,role,name,login,password_hash) VALUES($1,$2,$3,$4,$5,$6)",
         teacherId,
         schoolId,
         "teacher",
@@ -34,7 +33,7 @@ try {
         hash,
       );
     });
-    const { token } = issueSession(db, teacherId, 1);
+    const { token } = await issueSession(db, teacherId, 1);
     const headers = { authorization: `Bearer ${token}` };
     const post = async (path: string, payload: object) => {
       const response = await app.inject({

@@ -141,3 +141,12 @@ POST /planning/assistant exige professor responsável pela turma. Corpo: classro
 Retorno: {mode:"ai", requiresTeacherReview:true, bnccVerification:"pending", reply, content}. A operação apenas propõe conteúdo; não salva nem publica missão. A interface pode aplicar content ao editor e usar as rotas normais após revisão docente. O identificador da turma é usado na autorização e excluído do contexto enviado ao agente.
 
 Falhas: 503 AI_NOT_CONFIGURED, AI_CONFIGURATION_ERROR, AI_CREDITS_REQUIRED, AI_MODEL_UNAVAILABLE ou AI_PROVIDER_BUSY; 502 AI_INVALID_RESPONSE/AI_UNAVAILABLE; 504 AI_TIMEOUT; 413 AI_CONTEXT_TOO_LARGE; 429 AI_BUSY ou AI_BUDGET_REACHED (este último inclui Retry-After). Há também erros usuais de autenticação, autorização e validação. Não repetir geração automaticamente. Ver [limites e configuração](../README.md#ativar-o-assistente-de-ia).
+
+
+### Questões de investigação
+
+MissionContent aceita questions opcional (1–10 objetos {id,topic,prompt}, IDs únicos). A saída do assistente exige questions. O pedido de planejamento aceita topics opcional (até dez textos); a resposta deve cobrir os tópicos informados.
+
+POST /sync/submissions aceita answers opcional (até dez objetos {questionId,text}, texto não vazio de até 2.000 caracteres). Em missões com questions, cada pergunta precisa de exatamente uma resposta e evidence pode ser vazio. Entregas incompletas retornam 422 INCOMPLETE_ANSWERS. Sem perguntas, evidence deve conter texto; respostas extras ou texto vazio retornam 422 INVALID_EVIDENCE. Campos malformados continuam retornando 400.
+
+Answers aparece na entrega, nas revisões e na versão atual de um conflito. A ordem de answers não altera a assinatura idempotente. A sugestão local de feedback não cria nova rota; publicação usa POST /submissions/:id/evaluations após revisão.

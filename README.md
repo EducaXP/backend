@@ -1,12 +1,14 @@
 # EducaXP — backend do MVP
 
-API REST em TypeScript e Fastify, com persistência SQLite. Atende aos fluxos de missões, acompanhamento docente, rubricas e avatares dos arquivos exportados do Stitch.
+API REST em TypeScript e Fastify, com persistência PostgreSQL. Atende aos fluxos de missões, acompanhamento docente, rubricas e avatares dos arquivos exportados do Stitch.
 
 ## Executar
 
-Requisitos: Node.js 22.13+ na linha 22, ou Node.js 24+, e npm. Implementação verificada com Node.js 22.23.2. O módulo nativo `node:sqlite` pode emitir aviso de API experimental nessa versão; não exige instalar um driver nativo adicional.
+Requisitos: Node.js 22.13+ na linha 22, ou Node.js 24+, e npm. Implementação verificada com Node.js 22.23.2. O módulo nativo `node:sqlite` é usado somente pelo importador legado e pode emitir aviso experimental; a aplicação usa o driver `pg` para PostgreSQL.
 
-No terminal, dentro da pasta `backend`:
+**Já está rodando no Coolify com SQLite? Preserve o banco antigo antes do deploy e siga o [guia de migração](docs/POSTGRESQL.md).**
+
+Configure um PostgreSQL e sua DATABASE_URL no .env antes de iniciar. No terminal, dentro da pasta `backend`:
 
 ```powershell
 npm ci
@@ -29,9 +31,9 @@ npm run build
 npm start
 ```
 
-O servidor carrega `.env` automaticamente quando existe. As variáveis do processo têm precedência. Configure `DATABASE_PATH` para persistir em outro local, `CORS_ORIGINS` para os endereços do frontend e `ENABLE_DOCS=false` para desativar a documentação. Em `NODE_ENV=production`, a documentação fica desativada por padrão. `HOST` usa loopback por padrão; o projeto não é publicado automaticamente.
+O servidor carrega `.env` automaticamente quando existe. As variáveis do processo têm precedência. Configure `DATABASE_URL` com a conexão PostgreSQL, `CORS_ORIGINS` para os endereços do frontend e `ENABLE_DOCS=false` para desativar a documentação. Em `NODE_ENV=production`, a documentação fica desativada por padrão. `HOST` usa loopback por padrão; o projeto não é publicado automaticamente.
 
-SQLite usa um arquivo local com WAL. Durante o desenvolvimento em uma pasta sincronizada pelo OneDrive, prefira `DATABASE_PATH` em uma pasta local fora da sincronização. Não compartilhe o mesmo arquivo de banco entre máquinas ou instâncias via armazenamento de rede. A instalação inicial de dependências requer internet; executar a API e usar os modelos locais não requer serviços externos.
+O PostgreSQL roda como serviço separado, com volume persistente e backup. O backend aplica migrações versionadas ao conectar e não usa mais DATABASE_PATH. Veja [configuração, importação e operação no Coolify](docs/POSTGRESQL.md).
 
 ## O que está implementado
 
@@ -77,7 +79,7 @@ Limites: 12 pedidos/hora por professor, um simultâneo por professor, três por 
 npm run check
 ```
 
-Executa verificação de tipos, testes de integração com SQLite real e build. Os testes usam dados fictícios e bancos isolados; não modificam o banco de desenvolvimento. Cobrem ciclo completo, autenticação, separação entre escolas/turmas/grupos, reconexão, concorrência, histórico, persistência após reinício, autorização docente, XP sem duplicação e proteção contra tentativas repetidas de login.
+Executa verificação de tipos, testes de integração com PostgreSQL embarcado (PGlite) e build. Os testes usam dados fictícios e bancos isolados; não modificam o banco de desenvolvimento. Cobrem ciclo completo, autenticação, separação entre escolas/turmas/grupos, reconexão, concorrência, histórico, persistência após reinício, autorização docente, XP sem duplicação e proteção contra tentativas repetidas de login.
 
 ```powershell
 npm audit --omit=dev
@@ -92,7 +94,7 @@ src/
   app.ts                 Construção da API, autenticação e plugins
   server.ts              Inicialização HTTP e encerramento
   config.ts              Configuração por ambiente
-  db.ts                  SQLite e migrações versionadas
+  db.ts                  PostgreSQL, pool e migrações versionadas
   auth.ts                Hash de senhas, sessões e papéis
   access.ts              Autorização por escola, turma e grupo
   schemas.ts             Contratos de entrada e validação
@@ -113,12 +115,12 @@ docs/API.md              Contrato e integração com o frontend
 - A composição dos grupos é fixa por turma no MVP; os papéis podem rodar. Transferência entre grupos, matrícula em várias turmas e movimentação de estudantes ficam para a próxima etapa.
 - O cadastro inicial de escola e professor existe pelo seed fictício. Provisionamento real, recuperação de senha docente, gestão de consentimentos/requisitos institucionais e rotinas de exportação/exclusão ainda não estão implementados.
 - Não existem métricas de atenção, presença digital, aparelhos conectados ou tempo online. A pausa é um combinado pedagógico; não bloqueia o dispositivo.
-- O SQLite síncrono e o rate limiter em memória atendem a uma instância inicial. Não houve teste de carga ou validação em escola real. Um piloto exige planejamento de operação, HTTPS, backups, limites de acesso e governança de dados.
+- O PostgreSQL usa pool e transações; o rate limiter permanece em memória por processo. Não houve teste de carga ou validação em escola real. Um piloto exige planejamento de operação, HTTPS, backups, limites de acesso e governança de dados.
 
 ## Dados e retenção
 
 Guarde apenas nomes de exibição/apelidos, vínculos pedagógicos e evidências necessárias. Senhas e PINs usam scrypt com salt aleatório. O banco guarda somente o hash dos tokens de sessão. Sessões expiram (12 horas por padrão), são revogadas no logout e expirações são removidas ao emitir novas sessões. Redefinir o PIN revoga todas as sessões daquele estudante.
 
-Entregas, versões, avaliações e chaves de idempotência permanecem no banco durante a demonstração. Não há expurgo automático que possa eliminar trabalho ainda não sincronizado. A base fictícia é descartável ao encerrar a demonstração; a política de retenção e exclusão de um piloto deve ser definida antes de introduzir dados reais. Os arquivos SQLite não são criptografados pela aplicação: restrinja seu acesso pelo sistema operacional.
+Entregas, versões, avaliações e chaves de idempotência permanecem no banco durante a demonstração. Não há expurgo automático que possa eliminar trabalho ainda não sincronizado. A base fictícia é descartável ao encerrar a demonstração; a política de retenção e exclusão de um piloto deve ser definida antes de introduzir dados reais. A aplicação não cifra o armazenamento do PostgreSQL: restrinja o acesso ao serviço e aos backups.
 
 O backend responde com `Cache-Control: no-store`. O frontend deverá persistir offline apenas os dados selecionados, separados por identidade/grupo, e proteger rascunhos pendentes antes de sair ou trocar perfil. Não manter tokens em armazenamento acessível a scripts persistentes por conveniência: começar com tokens em memória e exigir nova entrada após recarregar; uma estratégia de sessão persistente deve ser projetada explicitamente.

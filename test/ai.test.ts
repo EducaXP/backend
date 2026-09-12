@@ -26,7 +26,22 @@ const context = {
 };
 const proposal = {
   reply: "Proposta fictícia. Revisão curricular pendente.",
-  content: context.currentDraft,
+  content: {
+    ...context.currentDraft,
+    questions: [
+      {
+        id: "q1",
+        topic: "Porcentagem",
+        prompt:
+          "Um produto custa R$ 100 e tem 20% de desconto. Qual é o preço final? Expliquem o cálculo.",
+      },
+      {
+        id: "q2",
+        topic: "Comparação",
+        prompt: "Que evidência vocês usariam para escolher entre duas ofertas?",
+      },
+    ],
+  },
 };
 const envelope = (value: unknown = proposal) => ({
   choices: [

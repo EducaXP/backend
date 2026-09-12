@@ -17,7 +17,6 @@ import {
   version,
   type MissionContent,
 } from "../schemas.js";
-
 export const missionView = (row: MissionRow) => ({
   id: row.id,
   classroomId: row.classroom_id,
@@ -28,6 +27,16 @@ export const missionView = (row: MissionRow) => ({
   createdAt: row.created_at,
 });
 function validateRubric(content: MissionContent) {
+  if (
+    content.questions &&
+    new Set(content.questions.map((q) => q.id)).size !==
+      content.questions.length
+  )
+    throw new ApiError(
+      422,
+      "DUPLICATE_QUESTION",
+      "Cada questão precisa de um identificador diferente.",
+    );
   if (new Set(content.rubric.map((c) => c.id)).size !== content.rubric.length) {
     throw new ApiError(
       422,
@@ -45,11 +54,11 @@ export function missionRoutes(instance: FastifyInstance, db: Store) {
       schema: { tags: ["Missões"], params: idParams, body: missionContent },
     },
     async (req, reply) => {
-      classroomAccess(db, req.user, req.params.id);
+      await classroomAccess(db, req.user, req.params.id);
       validateRubric(req.body);
       const id = randomUUID();
-      db.run(
-        "INSERT INTO missions(id,classroom_id,content,created_at) VALUES(?,?,?,?)",
+      await db.run(
+        "INSERT INTO missions(id,classroom_id,content,created_at) VALUES($1,$2,$3,$4)",
         id,
         req.params.id,
         JSON.stringify(req.body),
@@ -59,7 +68,10 @@ export function missionRoutes(instance: FastifyInstance, db: Store) {
         .code(201)
         .send(
           missionView(
-            db.get<MissionRow>("SELECT * FROM missions WHERE id=?", id)!,
+            (await db.get<MissionRow>(
+              "SELECT * FROM missions WHERE id=$1",
+              id,
+            ))!,
           ),
         );
     },
@@ -70,10 +82,9 @@ export function missionRoutes(instance: FastifyInstance, db: Store) {
       schema: { tags: ["Missões"], params: idParams, querystring: pagination },
     },
     async (req) => {
-      classroomAccess(db, req.user, req.params.id);
-      const rows = db.all<MissionRow>(
-        `SELECT * FROM missions WHERE classroom_id=? AND (?='teacher' OR status!='draft')
-      ORDER BY created_at,id LIMIT ? OFFSET ?`,
+      await classroomAccess(db, req.user, req.params.id);
+      const rows = await db.all<MissionRow>(
+        "SELECT * FROM missions WHERE classroom_id=$1 AND ($2='teacher' OR status!='draft')\n      ORDER BY created_at,id LIMIT $3 OFFSET $4",
         req.params.id,
         req.user.role,
         req.query.limit ?? 30,
@@ -85,7 +96,8 @@ export function missionRoutes(instance: FastifyInstance, db: Store) {
   app.get(
     "/missions/:id",
     { schema: { tags: ["Missões"], params: idParams } },
-    async (req) => missionView(missionAccess(db, req.user, req.params.id)),
+    async (req) =>
+      missionView(await missionAccess(db, req.user, req.params.id)),
   );
   app.put(
     "/missions/:id",
@@ -94,8 +106,8 @@ export function missionRoutes(instance: FastifyInstance, db: Store) {
       schema: { tags: ["Missões"], params: idParams, body: missionEdit },
     },
     async (req) =>
-      db.transaction(() => {
-        const mission = missionAccess(db, req.user, req.params.id);
+      await db.transaction(async () => {
+        const mission = await missionAccess(db, req.user, req.params.id);
         if (mission.version !== req.body.baseVersion)
           throw new ApiError(
             409,
@@ -110,13 +122,16 @@ export function missionRoutes(instance: FastifyInstance, db: Store) {
             "O conteúdo publicado é preservado para manter as entregas e rubricas consistentes. Crie outra missão.",
           );
         validateRubric(req.body.content);
-        db.run(
-          "UPDATE missions SET content=?,version=version+1 WHERE id=?",
+        await db.run(
+          "UPDATE missions SET content=$1,version=version+1 WHERE id=$2",
           JSON.stringify(req.body.content),
           mission.id,
         );
         return missionView(
-          db.get<MissionRow>("SELECT * FROM missions WHERE id=?", mission.id)!,
+          (await db.get<MissionRow>(
+            "SELECT * FROM missions WHERE id=$1",
+            mission.id,
+          ))!,
         );
       }),
   );
@@ -137,8 +152,8 @@ export function missionRoutes(instance: FastifyInstance, db: Store) {
       },
     },
     async (req) =>
-      db.transaction(() => {
-        const mission = missionAccess(db, req.user, req.params.id);
+      await db.transaction(async () => {
+        const mission = await missionAccess(db, req.user, req.params.id);
         if (mission.version !== req.body.baseVersion)
           throw new ApiError(
             409,
@@ -155,13 +170,16 @@ export function missionRoutes(instance: FastifyInstance, db: Store) {
             "INVALID_TRANSITION",
             "Transição de estado inválida.",
           );
-        db.run(
-          "UPDATE missions SET status=?,version=version+1 WHERE id=?",
+        await db.run(
+          "UPDATE missions SET status=$1,version=version+1 WHERE id=$2",
           req.body.status,
           mission.id,
         );
         return missionView(
-          db.get<MissionRow>("SELECT * FROM missions WHERE id=?", mission.id)!,
+          (await db.get<MissionRow>(
+            "SELECT * FROM missions WHERE id=$1",
+            mission.id,
+          ))!,
         );
       }),
   );

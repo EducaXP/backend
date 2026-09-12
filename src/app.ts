@@ -24,10 +24,10 @@ import { missionRoutes } from "./routes/missions.js";
 import { learningRoutes } from "./routes/learning.js";
 import { assistantRoutes } from "./routes/assistant.js";
 import type { PlanningAgent } from "./planning-agent.js";
-
 export interface AppOptions {
   planningAgent?: PlanningAgent;
-  databasePath?: string;
+  databaseUrl?: string;
+  store?: Store;
   logger?: boolean;
   corsOrigins?: string[];
   sessionHours?: number;
@@ -35,7 +35,7 @@ export interface AppOptions {
   rateLimitMax?: number;
 }
 export async function buildApp(options: AppOptions = {}) {
-  const db = new Store(options.databasePath ?? ":memory:");
+  const db = options.store || (await Store.connect(options.databaseUrl ?? ""));
   const app = Fastify({
     logger: options.logger
       ? {
@@ -46,7 +46,7 @@ export async function buildApp(options: AppOptions = {}) {
     bodyLimit: 64 * 1024,
     ajv: { customOptions: { removeAdditional: false, coerceTypes: "array" } },
   }).withTypeProvider<TypeBoxTypeProvider>();
-  app.addHook("onClose", async () => db.close());
+  app.addHook("onClose", async () => await db.close());
   app.addHook("onSend", async (_req, reply) => {
     reply.header("Cache-Control", "no-store");
     reply.header("X-Content-Type-Options", "nosniff");
@@ -54,54 +54,46 @@ export async function buildApp(options: AppOptions = {}) {
   });
   app.setErrorHandler<FastifyError>((error, req, reply) => {
     if (error instanceof ApiError)
-      return reply
-        .code(error.statusCode)
-        .send({
-          error: {
-            code: error.code,
-            message: error.message,
-            details: error.details,
-          },
-        });
+      return reply.code(error.statusCode).send({
+        error: {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+        },
+      });
     if (error.validation)
-      return reply
-        .code(400)
-        .send({
-          error: {
-            code: "VALIDATION_ERROR",
-            message: "Confira os campos enviados.",
-            details: error.validation.map((v) => ({
-              path: v.instancePath,
-              rule: v.keyword,
-            })),
-          },
-        });
+      return reply.code(400).send({
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Confira os campos enviados.",
+          details: error.validation.map((v) => ({
+            path: v.instancePath,
+            rule: v.keyword,
+          })),
+        },
+      });
     if (error.statusCode && error.statusCode >= 400 && error.statusCode < 500) {
-      return reply
-        .code(error.statusCode)
-        .send({
-          error: {
-            code: error.statusCode === 429 ? "RATE_LIMITED" : "INVALID_REQUEST",
-            message:
-              error.statusCode === 429
-                ? "Muitas tentativas. Aguarde um minuto e tente novamente."
-                : "Requisição inválida.",
-          },
-        });
+      return reply.code(error.statusCode).send({
+        error: {
+          code: error.statusCode === 429 ? "RATE_LIMITED" : "INVALID_REQUEST",
+          message:
+            error.statusCode === 429
+              ? "Muitas tentativas. Aguarde um minuto e tente novamente."
+              : "Requisição inválida.",
+        },
+      });
     }
     // Do not log payloads, SQL parameters or database error messages with student data.
     req.log.error(
       { requestId: req.id, errorType: error.name },
       "Falha interna",
     );
-    return reply
-      .code(500)
-      .send({
-        error: {
-          code: "INTERNAL_ERROR",
-          message: "Não foi possível concluir. Tente novamente.",
-        },
-      });
+    return reply.code(500).send({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Não foi possível concluir. Tente novamente.",
+      },
+    });
   });
   app.setNotFoundHandler(async (_req, reply) =>
     reply
@@ -136,7 +128,7 @@ export async function buildApp(options: AppOptions = {}) {
     });
   }
   app.get("/health", { schema: { tags: ["Saúde"] } }, async () => {
-    db.get("SELECT 1");
+    await db.get("SELECT 1");
     return { status: "ok", service: "educaxp-api" };
   });
   const dummyHash = await hashPassword("unused-dummy-password");
@@ -190,8 +182,12 @@ export async function buildApp(options: AppOptions = {}) {
       },
     },
     async (req) => {
-      const user = db.get<User & { password_hash: string }>(
-        "SELECT * FROM users WHERE login=? AND role='teacher'",
+      const user = await db.get<
+        User & {
+          password_hash: string;
+        }
+      >(
+        "SELECT * FROM users WHERE login=$1 AND role='teacher'",
         req.body.login,
       );
       const valid = await verifyPassword(
@@ -204,7 +200,7 @@ export async function buildApp(options: AppOptions = {}) {
           "INVALID_CREDENTIALS",
           "Credenciais inválidas.",
         );
-      return issueSession(db, user.id, sessionHours);
+      return await issueSession(db, user.id, sessionHours);
     },
   );
   app.post(
@@ -221,10 +217,12 @@ export async function buildApp(options: AppOptions = {}) {
       },
     },
     async (req) => {
-      const user = db.get<User & { password_hash: string }>(
-        `SELECT u.* FROM users u
-      JOIN memberships m ON m.user_id=u.id JOIN classrooms c ON c.id=m.classroom_id
-      WHERE c.join_code=? AND m.alias=? AND u.role='student'`,
+      const user = await db.get<
+        User & {
+          password_hash: string;
+        }
+      >(
+        "SELECT u.* FROM users u\n      JOIN memberships m ON m.user_id=u.id JOIN classrooms c ON c.id=m.classroom_id\n      WHERE c.join_code=$1 AND m.alias=$2 AND u.role='student'",
         req.body.classCode.toUpperCase(),
         req.body.alias.toLowerCase(),
       );
@@ -238,7 +236,7 @@ export async function buildApp(options: AppOptions = {}) {
           "INVALID_CREDENTIALS",
           "Credenciais inválidas.",
         );
-      return issueSession(db, user.id, sessionHours);
+      return await issueSession(db, user.id, sessionHours);
     },
   );
   await app.register(
@@ -255,8 +253,8 @@ export async function buildApp(options: AppOptions = {}) {
         schoolId: req.user.school_id,
       }));
       secured.post("/auth/logout", async (req, reply) => {
-        db.run(
-          "DELETE FROM sessions WHERE token_hash=?",
+        await db.run(
+          "DELETE FROM sessions WHERE token_hash=$1",
           digest(req.headers.authorization!.slice(7)),
         );
         return reply.code(204).send();

@@ -1,8 +1,6 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 
 import { readAIConfig } from "./ai.js";
-
 export function loadConfig() {
   if (existsSync(".env")) process.loadEnvFile(".env");
   const port = Number(process.env.PORT ?? 3333);
@@ -16,7 +14,7 @@ export function loadConfig() {
     host: process.env.HOST ?? "127.0.0.1",
     port,
     sessionHours,
-    databasePath: resolve(process.env.DATABASE_PATH ?? "./data/educaxp.db"),
+    databaseUrl: readDatabaseUrl(process.env),
     corsOrigins: (
       process.env.CORS_ORIGINS ?? "http://localhost:5173,http://127.0.0.1:5173"
     )
@@ -28,4 +26,26 @@ export function loadConfig() {
       (process.env.ENABLE_DOCS === undefined &&
         process.env.NODE_ENV !== "production"),
   };
+}
+
+export function readDatabaseUrl(env: NodeJS.ProcessEnv): string {
+  const value = env.DATABASE_URL?.trim();
+  if (!value)
+    throw new Error(
+      "Configure DATABASE_URL com a conexão interna do PostgreSQL no Coolify.",
+    );
+  try {
+    const url = new URL(value);
+    if (
+      !["postgres:", "postgresql:"].includes(url.protocol) ||
+      !url.hostname ||
+      !url.pathname.slice(1)
+    )
+      throw new Error();
+  } catch {
+    throw new Error(
+      "DATABASE_URL deve ser uma URL PostgreSQL válida com nome do banco.",
+    );
+  }
+  return value;
 }

@@ -1,9 +1,19 @@
 import { Type, type Static } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
-import { missionContent, object, text, uuid } from "./schemas.js";
+import {
+  missionContent,
+  investigationQuestions,
+  object,
+  text,
+  uuid,
+} from "./schemas.js";
 import { ApiError } from "./domain.js";
 
-export const proposedContent = Type.Omit(missionContent, ["bnccReference"]);
+const draftContent = Type.Omit(missionContent, ["bnccReference"]);
+export const proposedContent = object({
+  ...draftContent.properties,
+  questions: investigationQuestions,
+});
 export const assistantRequest = object({
   classroomId: uuid,
   instruction: text(4000),
@@ -11,7 +21,8 @@ export const assistantRequest = object({
   schoolYear: text(50),
   durationMinutes: Type.Integer({ minimum: 1, maximum: 240 }),
   resources: Type.String({ maxLength: 1500 }),
-  currentDraft: Type.Optional(proposedContent),
+  topics: Type.Optional(Type.Array(text(160), { maxItems: 10 })),
+  currentDraft: Type.Optional(draftContent),
   history: Type.Optional(
     Type.Array(
       object({
@@ -34,7 +45,10 @@ export type PlanningAgent = (
   context: PlanningContext,
   signal: AbortSignal,
 ) => Promise<unknown>;
-export function validateProposal(value: unknown): AssistantProposal {
+export function validateProposal(
+  value: unknown,
+  topics?: string[],
+): AssistantProposal {
   if (!Value.Check(assistantOutput, value))
     throw new ApiError(
       502,
@@ -44,12 +58,29 @@ export function validateProposal(value: unknown): AssistantProposal {
   if (
     new Set(value.content.rubric.map((c) => c.id)).size !==
       value.content.rubric.length ||
+    new Set(value.content.questions.map((q) => q.id)).size !==
+      value.content.questions.length ||
     !value.content.steps.some((s) => s.mode === "off_screen")
   )
     throw new ApiError(
       502,
       "AI_INVALID_RESPONSE",
       "A proposta precisa de critérios distintos e uma etapa fora da tela. Seu rascunho foi preservado.",
+    );
+  if (
+    topics?.some(
+      (topic) =>
+        !value.content.questions.some(
+          (q) =>
+            q.topic.trim().toLocaleLowerCase("pt-BR") ===
+            topic.trim().toLocaleLowerCase("pt-BR"),
+        ),
+    )
+  )
+    throw new ApiError(
+      502,
+      "AI_INVALID_RESPONSE",
+      "A proposta não cobriu todos os tópicos. Seu rascunho foi preservado.",
     );
   return value;
 }

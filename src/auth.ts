@@ -2,7 +2,6 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import type { Store } from "./db.js";
 import { ApiError, type User } from "./domain.js";
-
 declare module "fastify" {
   interface FastifyRequest {
     user: User;
@@ -27,12 +26,16 @@ export async function verifyPassword(password: string, hash: string) {
 }
 export const digest = (input: string) =>
   createHash("sha256").update(input).digest("hex");
-export function issueSession(db: Store, userId: string, sessionHours: number) {
+export async function issueSession(
+  db: Store,
+  userId: string,
+  sessionHours: number,
+) {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = Date.now() + sessionHours * 3600000;
-  db.run("DELETE FROM sessions WHERE expires_at <= ?", Date.now());
-  db.run(
-    "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)",
+  await db.run("DELETE FROM sessions WHERE expires_at <= $1", Date.now());
+  await db.run(
+    "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,$3)",
     digest(token),
     userId,
     expiresAt,
@@ -50,9 +53,8 @@ export function authentication(db: Store) {
         "UNAUTHENTICATED",
         "Entre novamente para continuar.",
       );
-    const user = db.get<User>(
-      `SELECT u.id,u.school_id,u.role,u.name,u.login,u.avatar_item,u.eco_mode
-      FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?`,
+    const user = await db.get<User>(
+      "SELECT u.id,u.school_id,u.role,u.name,u.login,u.avatar_item,u.eco_mode\n      FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=$1 AND s.expires_at>$2",
       digest(token),
       Date.now(),
     );

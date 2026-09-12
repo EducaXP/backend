@@ -28,7 +28,6 @@ import {
   type MissionContent,
 } from "../schemas.js";
 import { submissionView, writeSubmission } from "../submissions.js";
-
 const evaluationView = (row: EvaluationRow) => ({
   id: row.id,
   submissionId: row.submission_id,
@@ -37,7 +36,6 @@ const evaluationView = (row: EvaluationRow) => ({
   scores: JSON.parse(row.scores),
   createdAt: row.created_at,
 });
-
 export function learningRoutes(instance: FastifyInstance, db: Store) {
   const app = instance.withTypeProvider<TypeBoxTypeProvider>();
   app.post(
@@ -49,15 +47,15 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
         summary: "Envia uma operação idempotente com controle de versão",
       },
     },
-    async (req) => writeSubmission(db, req.user, req.body),
+    async (req) => await writeSubmission(db, req.user, req.body),
   );
   app.get(
     "/submissions/:id",
     { schema: { tags: ["Entregas"], params: idParams } },
     async (req) => {
-      const submission = submissionAccess(db, req.user, req.params.id);
-      const evaluation = db.get<EvaluationRow>(
-        "SELECT * FROM evaluations WHERE submission_id=? AND submission_version=?",
+      const submission = await submissionAccess(db, req.user, req.params.id);
+      const evaluation = await db.get<EvaluationRow>(
+        "SELECT * FROM evaluations WHERE submission_id=$1 AND submission_version=$2",
         submission.id,
         submission.version,
       );
@@ -73,20 +71,18 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
       schema: { tags: ["Entregas"], params: idParams, querystring: pagination },
     },
     async (req) => {
-      missionAccess(db, req.user, req.params.id);
+      await missionAccess(db, req.user, req.params.id);
       return {
-        items: db
-          .all<SubmissionRow>(
-            `SELECT s.* FROM submissions s WHERE s.mission_id=? AND
-      (?='teacher' OR EXISTS(SELECT 1 FROM group_members gm WHERE gm.group_id=s.group_id AND gm.user_id=?))
-      ORDER BY s.updated_at,s.id LIMIT ? OFFSET ?`,
+        items: (
+          await db.all<SubmissionRow>(
+            "SELECT s.* FROM submissions s WHERE s.mission_id=$1 AND\n      ($2='teacher' OR EXISTS(SELECT 1 FROM group_members gm WHERE gm.group_id=s.group_id AND gm.user_id=$3))\n      ORDER BY s.updated_at,s.id LIMIT $4 OFFSET $5",
             req.params.id,
             req.user.role,
             req.user.id,
             req.query.limit ?? 30,
             req.query.offset ?? 0,
           )
-          .map(submissionView),
+        ).map(submissionView),
       };
     },
   );
@@ -96,19 +92,24 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
       schema: { tags: ["Entregas"], params: idParams, querystring: pagination },
     },
     async (req) => {
-      submissionAccess(db, req.user, req.params.id);
+      await submissionAccess(db, req.user, req.params.id);
       return {
-        items: db
-          .all<{
+        items: (
+          await db.all<{
             version: number;
             content: string;
             created_at: string;
-          }>("SELECT version,content,created_at FROM submission_revisions WHERE submission_id=? ORDER BY version DESC LIMIT ? OFFSET ?", req.params.id, req.query.limit ?? 30, req.query.offset ?? 0)
-          .map((row) => ({
-            version: row.version,
-            content: JSON.parse(row.content),
-            createdAt: row.created_at,
-          })),
+          }>(
+            "SELECT version,content,created_at FROM submission_revisions WHERE submission_id=$1 ORDER BY version DESC LIMIT $2 OFFSET $3",
+            req.params.id,
+            req.query.limit ?? 30,
+            req.query.offset ?? 0,
+          )
+        ).map((row) => ({
+          version: row.version,
+          content: JSON.parse(row.content),
+          createdAt: row.created_at,
+        })),
       };
     },
   );
@@ -119,8 +120,8 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
       schema: { tags: ["Avaliações"], params: idParams, body: evaluationWrite },
     },
     async (req) =>
-      db.transaction(() => {
-        const submission = submissionAccess(db, req.user, req.params.id);
+      await db.transaction(async () => {
+        const submission = await submissionAccess(db, req.user, req.params.id);
         if (submission.version !== req.body.submissionVersion) {
           throw new ApiError(
             409,
@@ -129,7 +130,11 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
             { currentVersion: submission.version },
           );
         }
-        const mission = missionAccess(db, req.user, submission.mission_id);
+        const mission = await missionAccess(
+          db,
+          req.user,
+          submission.mission_id,
+        );
         const content: MissionContent = JSON.parse(mission.content);
         const scores = [...req.body.scores].sort((a, b) =>
           a.criterionId.localeCompare(b.criterionId),
@@ -148,8 +153,8 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
           );
         }
         const serializedScores = JSON.stringify(scores);
-        const previous = db.get<EvaluationRow>(
-          "SELECT * FROM evaluations WHERE submission_id=? AND submission_version=?",
+        const previous = await db.get<EvaluationRow>(
+          "SELECT * FROM evaluations WHERE submission_id=$1 AND submission_version=$2",
           submission.id,
           submission.version,
         );
@@ -164,9 +169,8 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
         }
         const id = randomUUID();
         const timestamp = now();
-        db.run(
-          `INSERT INTO evaluations(id,submission_id,submission_version,teacher_id,feedback,scores,created_at)
-      VALUES(?,?,?,?,?,?,?)`,
+        await db.run(
+          "INSERT INTO evaluations(id,submission_id,submission_version,teacher_id,feedback,scores,created_at)\n      VALUES($1,$2,$3,$4,$5,$6,$7)",
           id,
           submission.id,
           submission.version,
@@ -177,9 +181,8 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
         );
         let awardedStudents = 0;
         if (req.body.recognizeParticipation) {
-          const result = db.run(
-            `INSERT OR IGNORE INTO rewards(user_id,mission_id,xp,reason,created_at)
-        SELECT user_id,?,100,'Participação reconhecida pelo educador',? FROM group_members WHERE group_id=?`,
+          const result = await db.run(
+            "INSERT INTO rewards(user_id,mission_id,xp,reason,created_at)\n        SELECT user_id,$1,100,'Participa\u00E7\u00E3o reconhecida pelo educador',$2 FROM group_members WHERE group_id=$3 ON CONFLICT DO NOTHING",
             mission.id,
             timestamp,
             submission.group_id,
@@ -188,7 +191,10 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
         }
         return {
           evaluation: evaluationView(
-            db.get<EvaluationRow>("SELECT * FROM evaluations WHERE id=?", id)!,
+            (await db.get<EvaluationRow>(
+              "SELECT * FROM evaluations WHERE id=$1",
+              id,
+            ))!,
           ),
           awardedStudents,
         };
@@ -205,37 +211,32 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
       },
     },
     async (req, reply) => {
-      groupAccess(db, req.user, req.params.id);
+      await groupAccess(db, req.user, req.params.id);
       const id = randomUUID();
       const timestamp = now();
-      db.run(
-        "INSERT INTO help_requests(id,group_id,message,created_at) VALUES(?,?,?,?)",
+      await db.run(
+        "INSERT INTO help_requests(id,group_id,message,created_at) VALUES($1,$2,$3,$4)",
         id,
         req.params.id,
         req.body.message,
         timestamp,
       );
-      return reply
-        .code(201)
-        .send({
-          id,
-          message: req.body.message,
-          createdAt: timestamp,
-          resolvedAt: null,
-        });
+      return reply.code(201).send({
+        id,
+        message: req.body.message,
+        createdAt: timestamp,
+        resolvedAt: null,
+      });
     },
   );
   app.get(
     "/classrooms/:id/help",
     { schema: { tags: ["Ajuda"], params: idParams, querystring: pagination } },
     async (req) => {
-      classroomAccess(db, req.user, req.params.id);
+      await classroomAccess(db, req.user, req.params.id);
       return {
-        items: db.all(
-          `SELECT h.id,h.group_id AS groupId,h.message,h.answer,h.created_at AS createdAt,h.resolved_at AS resolvedAt
-      FROM help_requests h JOIN groups g ON g.id=h.group_id WHERE g.classroom_id=? AND
-      (?='teacher' OR EXISTS(SELECT 1 FROM group_members gm WHERE gm.group_id=g.id AND gm.user_id=?))
-      ORDER BY h.created_at DESC,h.id LIMIT ? OFFSET ?`,
+        items: await db.all(
+          'SELECT h.id,h.group_id AS "groupId",h.message,h.answer,h.created_at AS "createdAt",h.resolved_at AS "resolvedAt"\n      FROM help_requests h JOIN groups g ON g.id=h.group_id WHERE g.classroom_id=$1 AND\n      ($2=\'teacher\' OR EXISTS(SELECT 1 FROM group_members gm WHERE gm.group_id=g.id AND gm.user_id=$3))\n      ORDER BY h.created_at DESC,h.id LIMIT $4 OFFSET $5',
           req.params.id,
           req.user.role,
           req.user.id,
@@ -257,12 +258,15 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
     },
     async (req) => {
       const help = requireFound(
-        db.get<{ group_id: string; resolved_at: string | null }>(
-          "SELECT group_id,resolved_at FROM help_requests WHERE id=?",
+        await db.get<{
+          group_id: string;
+          resolved_at: string | null;
+        }>(
+          "SELECT group_id,resolved_at FROM help_requests WHERE id=$1",
           req.params.id,
         ),
       );
-      groupAccess(db, req.user, help.group_id);
+      await groupAccess(db, req.user, help.group_id);
       if (help.resolved_at)
         throw new ApiError(
           409,
@@ -270,8 +274,8 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
           "Este pedido já foi respondido.",
         );
       const timestamp = now();
-      db.run(
-        "UPDATE help_requests SET answer=?,resolved_at=? WHERE id=?",
+      await db.run(
+        "UPDATE help_requests SET answer=$1,resolved_at=$2 WHERE id=$3",
         req.body.answer,
         timestamp,
         req.params.id,
@@ -287,10 +291,12 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
     "/me/avatar",
     { preHandler: student, schema: { tags: ["Avatar"] } },
     async (req) => {
-      const xp = db.get<{ xp: number }>(
-        "SELECT coalesce(sum(xp),0) xp FROM rewards WHERE user_id=?",
+      const xp = (await db.get<{
+        xp: number;
+      }>(
+        "SELECT coalesce(sum(xp),0) xp FROM rewards WHERE user_id=$1",
         req.user.id,
-      )!.xp;
+      ))!.xp;
       return {
         itemId: req.user.avatar_item,
         ecoMode: !!req.user.eco_mode,
@@ -311,18 +317,20 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
       const item = catalog.find((c) => c.id === req.body.itemId);
       if (!item)
         throw new ApiError(422, "INVALID_ITEM", "Item de avatar inexistente.");
-      const xp = db.get<{ xp: number }>(
-        "SELECT coalesce(sum(xp),0) xp FROM rewards WHERE user_id=?",
+      const xp = (await db.get<{
+        xp: number;
+      }>(
+        "SELECT coalesce(sum(xp),0) xp FROM rewards WHERE user_id=$1",
         req.user.id,
-      )!.xp;
+      ))!.xp;
       if (xp < item.requiredXp)
         throw new ApiError(
           409,
           "ITEM_LOCKED",
           "Este item ainda não foi desbloqueado.",
         );
-      db.run(
-        "UPDATE users SET avatar_item=?,eco_mode=? WHERE id=?",
+      await db.run(
+        "UPDATE users SET avatar_item=$1,eco_mode=$2 WHERE id=$3",
         item.id,
         Number(req.body.ecoMode),
         req.user.id,

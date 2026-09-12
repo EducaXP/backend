@@ -15,7 +15,13 @@ export function assistantRoutes(
   agent?: PlanningAgent,
 ) {
   const app = instance.withTypeProvider<TypeBoxTypeProvider>();
-  const budgets = new Map<string, { used: number; resetAt: number }>();
+  const budgets = new Map<
+    string,
+    {
+      used: number;
+      resetAt: number;
+    }
+  >();
   const active = new Set<string>();
   app.get(
     "/planning/assistant/status",
@@ -29,7 +35,7 @@ export function assistantRoutes(
       schema: { tags: ["Planejamento"], body: assistantRequest },
     },
     async (req, reply) => {
-      classroomAccess(db, req.user, req.body.classroomId);
+      await classroomAccess(db, req.user, req.body.classroomId);
       if (!agent)
         throw new ApiError(
           503,
@@ -93,7 +99,7 @@ export function assistantRoutes(
           mode: "ai",
           requiresTeacherReview: true,
           bnccVerification: "pending",
-          ...validateProposal(proposal),
+          ...validateProposal(proposal, req.body.topics),
         };
       } finally {
         clearTimeout(timer);
