@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -8,6 +8,9 @@ import { digest, hashPassword, issueSession } from "../src/auth.js";
 import type { PlanningAgent, PlanningContext } from "../src/planning-agent.js";
 import { planningTemplate } from "../src/planning.js";
 import { buildTestApp as buildApp } from "./support.js";
+const travel = JSON.parse(
+  readFileSync(new URL("./fixtures/travel.json", import.meta.url), "utf8"),
+);
 type HTTPMethods = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 async function fixture(
   t: TestContext,
@@ -871,6 +874,7 @@ test("assistente isola turmas, limita contexto e retorna proposta sem publicar m
       reply: "Proposta simulada para teste.",
       content: {
         ...planningTemplate({ ...context, theme: "porcentagem" }),
+        challenge: travel.challenge,
         questions: investigationQuestions,
       },
     };
@@ -939,6 +943,7 @@ test("assistente recusa respostas incompletas, critérios repetidos e BNCC não 
       reply: "BNCC inventada",
       content: {
         ...f.content,
+        challenge: travel.challenge,
         questions: investigationQuestions,
         bnccReference: { code: "FALSO", sourceUrl: "https://example.com" },
       },
@@ -947,6 +952,7 @@ test("assistente recusa respostas incompletas, critérios repetidos e BNCC não 
       reply: "Critérios duplicados",
       content: {
         ...f.content,
+        challenge: travel.challenge,
         questions: investigationQuestions,
         rubric: [f.content.rubric[0], f.content.rubric[0]],
       },
@@ -955,6 +961,7 @@ test("assistente recusa respostas incompletas, critérios repetidos e BNCC não 
       reply: "Somente tela",
       content: {
         ...f.content,
+        challenge: travel.challenge,
         questions: investigationQuestions,
         steps: f.content.steps.map((s) => ({ ...s, mode: "screen" })),
       },
@@ -991,6 +998,7 @@ test("assistente limita custo e impede pedidos simultâneos do mesmo professor",
       reply: "Proposta de teste",
       content: {
         ...planningTemplate({ ...context, theme: "teste" }),
+        challenge: travel.challenge,
         questions: investigationQuestions,
       },
     };
@@ -1007,7 +1015,11 @@ test("assistente limita custo e impede pedidos simultâneos do mesmo professor",
   );
   finish({
     reply: "Proposta de teste",
-    content: { ...f.content, questions: investigationQuestions },
+    content: {
+      ...f.content,
+      challenge: travel.challenge,
+      questions: investigationQuestions,
+    },
   });
   assert.equal((await first).statusCode, 200);
   hold = false;
@@ -1138,6 +1150,7 @@ test("assistente exige perguntas por tópico e preserva rascunhos antigos na ent
         schoolYear: "9º ano",
         durationMinutes: 30,
       }),
+      challenge: travel.challenge,
       questions,
     },
   }));
@@ -1396,7 +1409,10 @@ test("SSE recebe mudanças confirmadas, isola grupos e encerra sessão revogada"
     initial + 1,
   );
   assert.ok(!frames.join("").includes("Dúvida privada"));
-  assert.equal((await f.send("POST", "/auth/logout", f.enzo.token)).statusCode, 204);
+  assert.equal(
+    (await f.send("POST", "/auth/logout", f.enzo.token)).statusCode,
+    204,
+  );
   await wait(() => finished);
   await pump;
   assert.ok(frames.some((s) => s.startsWith("event: reauthenticate")));
@@ -1407,5 +1423,82 @@ test("SSE recebe mudanças confirmadas, isola grupos e encerra sessão revogada"
       })
     ).status,
     401,
+  );
+});
+
+test("desafio e tabela persistem na missão, com leitura autorizada e compatibilidade legada", async (t) => {
+  const f = await fixture(t);
+  const content = { ...f.content, ...travel };
+  const draft = await f.ok(
+    "POST",
+    "/classrooms/" + f.classroom.id + "/missions",
+    f.maria.token,
+    content,
+    201,
+  );
+  assert.deepEqual(draft.content.challenge, travel.challenge);
+  const edited = await f.ok("PUT", "/missions/" + draft.id, f.maria.token, {
+    baseVersion: 1,
+    content: {
+      ...content,
+      challenge: {
+        ...travel.challenge,
+        drivingQuestion: "Que viagem a equipe escolherá?",
+      },
+    },
+  });
+  assert.equal(
+    edited.content.challenge.drivingQuestion,
+    "Que viagem a equipe escolherá?",
+  );
+  await f.ok("PATCH", "/missions/" + draft.id + "/status", f.maria.token, {
+    baseVersion: edited.version,
+    status: "published",
+  });
+  const missions = await f.ok(
+    "GET",
+    "/classrooms/" + f.classroom.id + "/missions",
+    f.enzo.token,
+  );
+  assert.deepEqual(
+    missions.items.find((m: { id: string }) => m.id === draft.id).content
+      .challenge.dataTable,
+    travel.challenge.dataTable,
+  );
+  assert.equal(
+    (await f.send("GET", "/missions/" + draft.id, f.external.token)).statusCode,
+    404,
+  );
+  assert.equal(
+    (
+      await f.send(
+        "POST",
+        "/classrooms/" + f.classroom.id + "/missions",
+        f.maria.token,
+        {
+          ...content,
+          challenge: {
+            ...travel.challenge,
+            dataTable: {
+              ...travel.challenge.dataTable,
+              rows: [["incompleta", "1"]],
+            },
+          },
+        },
+      )
+    ).statusCode,
+    422,
+  );
+  assert.equal(
+    (
+      await f.ok(
+        "POST",
+        "/classrooms/" + f.classroom.id + "/missions",
+        f.maria.token,
+        f.content,
+        201,
+      )
+    ).content.challenge,
+    undefined,
   );
 });

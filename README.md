@@ -132,3 +132,10 @@ O combinado e a reflexão da equipe concedem 25 XP por integrante, uma vez por m
 
 
 A atualização online atual usa [SSE e LISTEN/NOTIFY](../docs/decisions/0007-sse.md), com reconexão automática. Publique o backend (migração 3) antes de atualizar o frontend/PWA. Não é necessário configurar webhook ou WebSocket.
+
+
+## Desafios contextualizados
+
+O assistente gera um enunciado com situação, pergunta central, dados de partida, regras e entrega esperada, além das perguntas por tópico. Tabelas de apoio são opcionais e editáveis. O professor revisa antes de publicar; a equipe recebe o enunciado completo, inclusive offline após preparar o acesso. A dinâmica é escolhida conforme o pedido e pode envolver investigação, projeto, experimento, debate, criação ou comparação de alternativas.
+
+Implantar backend antes do frontend; não há migração de banco. Missões antigas continuam funcionando. Veja [contrato, validação e limites](../docs/decisions/0009-desafios-contextualizados.md).

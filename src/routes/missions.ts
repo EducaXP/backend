@@ -10,6 +10,7 @@ import { planningTemplate } from "../planning.js";
 import {
   idParams,
   missionContent,
+  hasValidChallengeTable,
   missionEdit,
   object,
   pagination,
@@ -27,6 +28,12 @@ export const missionView = (row: MissionRow) => ({
   createdAt: row.created_at,
 });
 function validateRubric(content: MissionContent) {
+  if (!hasValidChallengeTable(content.challenge))
+    throw new ApiError(
+      422,
+      "INVALID_CHALLENGE_TABLE",
+      "Cada linha da tabela precisa de um valor para cada coluna.",
+    );
   if (
     content.questions &&
     new Set(content.questions.map((q) => q.id)).size !==

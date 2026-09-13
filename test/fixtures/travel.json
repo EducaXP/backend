@@ -1,0 +1,59 @@
+{
+  "challenge": {
+    "scenario": "Sua equipe vai organizar uma viagem fictícia para quatro pessoas durante três dias e duas noites. Há R$ 4.000,00 para transporte, hospedagem e alimentação. Comparem Serra e Costa e defendam uma escolha para o grupo.",
+    "drivingQuestion": "Qual viagem cabe no orçamento e vale mais para nossa equipe?",
+    "startingData": "Todos os preços abaixo são fictícios, preparados para a atividade. O transporte cobre ida e volta das quatro pessoas. Um quarto acomoda as quatro pessoas. A alimentação diária inclui três refeições por pessoa. Ambos os destinos têm duas atividades gratuitas: trilhas na Serra e visita à praia na Costa. A viagem leva quatro horas por trecho para a Serra e seis para a Costa. A calculadora é permitida; a planilha é opcional. Não é necessário pesquisar preços reais.",
+    "constraints": "Orçamento máximo: R$ 4.000,00. Considerem três dias de alimentação e duas noites de hospedagem. A Costa oferece 10% de desconto somente sobre o total das duas diárias do quarto. Não há descontos no transporte ou na alimentação. Não considerem outras taxas. Arredondem os valores monetários para duas casas decimais. Justifiquem também o peso do tempo de viagem e das atividades na decisão.",
+    "deliverable": "Entreguem uma resposta a cada questão, com cálculos e justificativas. Produzam em papel ou planilha uma tabela comparativa e um gráfico de barras dos custos finais; descrevam os valores e a leitura do gráfico na resposta. Apresentem em dois minutos a escolha e seus critérios. Quem registra alterna com quem confere os cálculos.",
+    "dataTable": {
+      "caption": "Preços fictícios para a investigação",
+      "columns": [
+        "Destino",
+        "Transporte do grupo, ida e volta (R$)",
+        "Quarto para 4, por noite (R$)",
+        "Alimentação por pessoa/dia (R$)"
+      ],
+      "rows": [
+        [
+          "Serra",
+          "1.200,00",
+          "450,00",
+          "65,00"
+        ],
+        [
+          "Costa",
+          "1.600,00",
+          "500,00",
+          "95,00"
+        ]
+      ]
+    }
+  },
+  "questions": [
+    {
+      "id": "porcentagem",
+      "topic": "Porcentagem",
+      "prompt": "Qual desconto de 10% incide nas duas diárias da Costa e qual valor de hospedagem deve entrar no orçamento? Mostrem a base e o cálculo."
+    },
+    {
+      "id": "razao",
+      "topic": "Razão e proporção",
+      "prompt": "Após encontrar os custos finais de cada destino, quanto corresponde a cada uma das quatro pessoas? Expliquem a relação entre custo do grupo e custo individual."
+    },
+    {
+      "id": "regra-tres",
+      "topic": "Regra de três",
+      "prompt": "Se fossem seis pessoas nos mesmos três dias, quanto custaria somente a alimentação em cada destino? Usem os preços por pessoa/dia, montem a proporção e comparem com quatro pessoas. Não alterem hospedagem ou transporte nesta projeção."
+    },
+    {
+      "id": "decimais",
+      "topic": "Operações com números decimais",
+      "prompt": "Calculem transporte, hospedagem e alimentação das quatro pessoas nos dois destinos, incluindo o desconto da Costa. Apresentem o total e a sobra ou falta em relação aos R$ 4.000,00, com valores em reais."
+    },
+    {
+      "id": "graficos",
+      "topic": "Interpretação de tabelas e gráficos",
+      "prompt": "Organizem uma tabela e um gráfico de barras com os custos finais. Registrem aqui os valores representados e expliquem o que a comparação revela. Qual destino escolheriam considerando também tempo de viagem e atividades? Justifiquem com dados, sem confundir menor preço com única escolha possível."
+    }
+  ]
+}

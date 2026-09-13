@@ -1,3 +1,8 @@
+import { readFileSync } from "node:fs";
+import { validateProposal } from "../src/planning-agent.js";
+const travel = JSON.parse(
+  readFileSync(new URL("./fixtures/travel.json", import.meta.url), "utf8"),
+);
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createPlanningAgent, readAIConfig, type AIConfig } from "../src/ai.js";
@@ -28,6 +33,7 @@ const proposal = {
   reply: "Proposta fictícia. Revisão curricular pendente.",
   content: {
     ...context.currentDraft,
+    challenge: travel.challenge,
     questions: [
       {
         id: "q1",
@@ -236,4 +242,78 @@ test("IA cancela transporte ao receber sinal de timeout e não inicia chamada j�
     rejectsCode("AI_TIMEOUT"),
   );
   assert.equal(called, false);
+});
+
+test("desafio obrigatório recusa enunciado ausente e tabela incompleta sem restringir a dinâmica", () => {
+  const full = { ...proposal, content: { ...proposal.content, ...travel } };
+  assert.deepEqual(
+    validateProposal(
+      full,
+      travel.questions.map((q: { topic: string }) => q.topic),
+    ),
+    full,
+  );
+  const { challenge: _, ...legacy } = full.content;
+  assert.throws(
+    () => validateProposal({ ...full, content: legacy }),
+    rejectsCode("AI_INVALID_RESPONSE"),
+  );
+  assert.throws(
+    () =>
+      validateProposal({
+        ...full,
+        content: {
+          ...full.content,
+          challenge: { ...travel.challenge, drivingQuestion: " " },
+        },
+      }),
+    rejectsCode("AI_INVALID_RESPONSE"),
+  );
+  assert.throws(
+    () =>
+      validateProposal({
+        ...full,
+        content: {
+          ...full.content,
+          challenge: {
+            ...travel.challenge,
+            dataTable: {
+              ...travel.challenge.dataTable,
+              rows: [["Serra", "1200"]],
+            },
+          },
+        },
+      }),
+    rejectsCode("AI_INVALID_RESPONSE"),
+  );
+  // A language activity is equally valid without prices, a table or competing destinations.
+  const writing = {
+    ...proposal,
+    content: {
+      ...proposal.content,
+      subject: "Língua Portuguesa",
+      challenge: {
+        scenario:
+          "Uma campanha fictícia da escola precisa explicar como reutilizar papel.",
+        drivingQuestion:
+          "Como convencer a comunidade a reduzir o desperdício sem culpabilizar colegas?",
+        startingData:
+          "Texto autoral de partida: Papel usado de um lado ainda pode guardar uma ideia. A campanha será lida no mural da sala.",
+        constraints:
+          "Criem um texto de até 80 palavras. Não usem nomes de colegas nem acusações.",
+        deliverable:
+          "Entreguem o texto, expliquem duas escolhas de linguagem e leiam a proposta para a turma.",
+        dataTable: null,
+      },
+      questions: [
+        {
+          id: "linguagem",
+          topic: "Argumentação",
+          prompt:
+            "Que argumentos sustentam a campanha e como eles se relacionam com o público do mural?",
+        },
+      ],
+    },
+  };
+  assert.deepEqual(validateProposal(writing, ["Argumentação"]), writing);
 });

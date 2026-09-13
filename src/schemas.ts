@@ -23,7 +23,32 @@ export const investigationQuestions = Type.Array(
   object({ id: text(40), topic: text(160), prompt: text(1500) }),
   { minItems: 1, maxItems: 10 },
 );
+export const challengeTable = object({
+  caption: text(160),
+  columns: Type.Array(text(100), { minItems: 2, maxItems: 6 }),
+  rows: Type.Array(Type.Array(text(300), { minItems: 2, maxItems: 6 }), {
+    minItems: 1,
+    maxItems: 12,
+  }),
+});
+export const missionChallenge = object({
+  scenario: text(3000),
+  drivingQuestion: text(500),
+  startingData: text(6000),
+  constraints: text(2000),
+  deliverable: text(2000),
+  dataTable: Type.Union([challengeTable, Type.Null()]),
+});
+export function hasValidChallengeTable(
+  challenge?: Static<typeof missionChallenge>,
+) {
+  const table = challenge?.dataTable;
+  return (
+    !table || table.rows.every((row) => row.length === table.columns.length)
+  );
+}
 export const missionContent = object({
+  challenge: Type.Optional(missionChallenge),
   questions: Type.Optional(investigationQuestions),
   title: text(),
   objective: text(2000),

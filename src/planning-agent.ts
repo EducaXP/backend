@@ -2,6 +2,8 @@ import { Type, type Static } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import {
   missionContent,
+  missionChallenge,
+  hasValidChallengeTable,
   investigationQuestions,
   object,
   text,
@@ -12,6 +14,7 @@ import { ApiError } from "./domain.js";
 const draftContent = Type.Omit(missionContent, ["bnccReference"]);
 export const proposedContent = object({
   ...draftContent.properties,
+  challenge: missionChallenge,
   questions: investigationQuestions,
 });
 export const assistantRequest = object({
@@ -60,12 +63,13 @@ export function validateProposal(
       value.content.rubric.length ||
     new Set(value.content.questions.map((q) => q.id)).size !==
       value.content.questions.length ||
-    !value.content.steps.some((s) => s.mode === "off_screen")
+    !value.content.steps.some((s) => s.mode === "off_screen") ||
+    !hasValidChallengeTable(value.content.challenge)
   )
     throw new ApiError(
       502,
       "AI_INVALID_RESPONSE",
-      "A proposta precisa de critérios distintos e uma etapa fora da tela. Seu rascunho foi preservado.",
+      "A proposta precisa de critérios distintos, uma etapa fora da tela e tabelas com colunas completas. Seu rascunho foi preservado.",
     );
   if (
     topics?.some(
