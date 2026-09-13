@@ -10,6 +10,7 @@ export interface Connection {
   release(): void;
 }
 export interface DatabaseDriver {
+  listen?(changed: () => void, lost: () => void): Promise<() => Promise<void>>;
   connect(): Promise<Connection>;
   end(): Promise<void>;
 }
@@ -31,7 +32,38 @@ export class Store {
     });
     // Connection errors must not print URLs, credentials or query parameters.
     pool.on("error", () => {});
-    const store = new Store(pool);
+    const store = new Store({
+      connect: () => pool.connect(),
+      end: () => pool.end(),
+      async listen(changed, lost) {
+        const client = new pg.Client({
+          connectionString,
+          connectionTimeoutMillis: 10000,
+          keepAlive: true,
+        });
+        let closing = false;
+        const failed = () => {
+          if (!closing) lost();
+        };
+        client.on("error", failed);
+        client.on("end", failed);
+        client.on("notification", (event) => {
+          if (event.channel === "educaxp_changes") changed();
+        });
+        try {
+          await client.connect();
+          await client.query("LISTEN educaxp_changes");
+        } catch {
+          closing = true;
+          await client.end().catch(() => {});
+          throw new Error("Canal de atualizações indisponível.");
+        }
+        return async () => {
+          closing = true;
+          await client.end().catch(() => {});
+        };
+      },
+    });
     try {
       await store.migrate();
       return store;
@@ -114,6 +146,11 @@ export class Store {
         );
       }
     });
+  }
+  async listenChanges(changed: () => void, lost: () => void) {
+    if (!this.driver.listen)
+      throw new Error("Driver sem suporte a notificações.");
+    return this.driver.listen(changed, lost);
   }
   async close() {
     if (!this.closed) {

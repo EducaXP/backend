@@ -294,7 +294,7 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
       const xp = (await db.get<{
         xp: number;
       }>(
-        "SELECT coalesce(sum(xp),0) xp FROM rewards WHERE user_id=$1",
+        "SELECT coalesce(sum(xp),0) xp FROM (SELECT xp FROM rewards WHERE user_id=$1 UNION ALL SELECT xp FROM focus_rewards WHERE user_id=$1) total",
         req.user.id,
       ))!.xp;
       return {
@@ -306,7 +306,7 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
           unlocked: xp >= item.requiredXp,
         })),
         rewardRule:
-          "100 XP por missão com participação reconhecida pelo professor, independentemente do canal de entrega.",
+          "100 XP pela participação reconhecida pelo professor e 25 XP pelo combinado e reflexão de foco da equipe, uma vez por missão. Papel e registro mediado também valem.",
       };
     },
   );
@@ -320,7 +320,7 @@ export function learningRoutes(instance: FastifyInstance, db: Store) {
       const xp = (await db.get<{
         xp: number;
       }>(
-        "SELECT coalesce(sum(xp),0) xp FROM rewards WHERE user_id=$1",
+        "SELECT coalesce(sum(xp),0) xp FROM (SELECT xp FROM rewards WHERE user_id=$1 UNION ALL SELECT xp FROM focus_rewards WHERE user_id=$1) total",
         req.user.id,
       ))!.xp;
       if (xp < item.requiredXp)

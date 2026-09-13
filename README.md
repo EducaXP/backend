@@ -124,3 +124,11 @@ Guarde apenas nomes de exibição/apelidos, vínculos pedagógicos e evidências
 Entregas, versões, avaliações e chaves de idempotência permanecem no banco durante a demonstração. Não há expurgo automático que possa eliminar trabalho ainda não sincronizado. A base fictícia é descartável ao encerrar a demonstração; a política de retenção e exclusão de um piloto deve ser definida antes de introduzir dados reais. A aplicação não cifra o armazenamento do PostgreSQL: restrinja o acesso ao serviço e aos backups.
 
 O backend responde com `Cache-Control: no-store`. O frontend deverá persistir offline apenas os dados selecionados, separados por identidade/grupo, e proteger rascunhos pendentes antes de sair ou trocar perfil. Não manter tokens em armazenamento acessível a scripts persistentes por conveniência: começar com tokens em memória e exigir nova entrada após recarregar; uma estratégia de sessão persistente deve ser projetada explicitamente.
+
+
+## Foco e atualização online
+
+O combinado e a reflexão da equipe concedem 25 XP por integrante, uma vez por missão, inclusive por registro mediado. O cronômetro é opcional e não mede atenção. Com conexão, mudanças chegam por SSE após a confirmação no PostgreSQL e aparecem sem recarregar a página, preservando rascunhos. Veja [regras, persistência, implantação e limites](../docs/decisions/0006-foco-e-atualizacoes.md).
+
+
+A atualização online atual usa [SSE e LISTEN/NOTIFY](../docs/decisions/0007-sse.md), com reconexão automática. Publique o backend (migração 3) antes de atualizar o frontend/PWA. Não é necessário configurar webhook ou WebSocket.

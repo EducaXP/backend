@@ -1160,3 +1160,252 @@ test("assistente exige perguntas por tópico e preserva rascunhos antigos na ent
     502,
   );
 });
+
+test("foco: bônus por equipe é idempotente, autorizado e equivalente no registro mediado", async (t) => {
+  const f = await fixture(t);
+  const body = {
+    operationId: randomUUID(),
+    missionId: f.mission.id,
+    groupId: f.group.id,
+    goal: "Comparar duas hipóteses",
+    strategy: "Alternar os papéis",
+    reflection: "Ouvir cada colega ajudou a encontrar uma diferença.",
+    channel: "digital",
+  };
+  const before = (await f.ok("GET", "/updates", f.enzo.token)).revision;
+  const responses = await Promise.all([
+    f.send("POST", "/sync/focus", f.enzo.token, body),
+    f.send("POST", "/sync/focus", f.enzo.token, body),
+  ]);
+  responses.forEach((r) => assert.equal(r.statusCode, 200, r.body));
+  assert.equal(responses.filter((r) => r.json().replayed).length, 1);
+  for (const user of [f.enzo, f.valentina])
+    assert.equal((await f.ok("GET", "/me/avatar", user.token)).xp, 25);
+  assert.equal((await f.ok("GET", "/me/avatar", f.lucas.token)).xp, 0);
+  assert.notEqual(
+    (await f.ok("GET", "/updates", f.enzo.token)).revision,
+    before,
+  );
+  assert.equal(
+    (
+      await f.send("POST", "/sync/focus", f.enzo.token, {
+        ...body,
+        reflection: "Outro texto",
+      })
+    ).statusCode,
+    409,
+  );
+  assert.equal(
+    (
+      await f.send("POST", "/sync/focus", f.valentina.token, {
+        ...body,
+        operationId: randomUUID(),
+      })
+    ).statusCode,
+    409,
+  );
+  assert.equal(
+    (await f.send("POST", "/sync/focus", f.lucas.token, body)).statusCode,
+    404,
+  );
+  assert.equal(
+    (await f.send("POST", "/sync/focus", f.external.token, body)).statusCode,
+    404,
+  );
+  assert.equal(
+    (
+      await f.send("POST", "/sync/focus", f.enzo.token, {
+        ...body,
+        channel: "teacher_mediated",
+      })
+    ).statusCode,
+    403,
+  );
+  assert.equal(
+    (
+      await f.send("POST", "/sync/focus", f.enzo.token, {
+        ...body,
+        screenTime: 1500,
+      })
+    ).statusCode,
+    400,
+  );
+  assert.equal(
+    (
+      await f.send("POST", "/sync/focus", f.enzo.token, {
+        ...body,
+        reflection: " ",
+      })
+    ).statusCode,
+    400,
+  );
+  await f.ok("POST", "/sync/focus", f.maria.token, {
+    ...body,
+    groupId: f.otherGroup.id,
+    operationId: randomUUID(),
+    channel: "teacher_mediated",
+  });
+  assert.equal((await f.ok("GET", "/me/avatar", f.lucas.token)).xp, 25);
+  assert.equal(
+    (
+      await f.ok(
+        "GET",
+        "/classrooms/" + f.classroom.id + "/focus",
+        f.enzo.token,
+      )
+    ).items.length,
+    1,
+  );
+  assert.equal(
+    (
+      await f.ok(
+        "GET",
+        "/classrooms/" + f.classroom.id + "/focus",
+        f.maria.token,
+      )
+    ).items.length,
+    2,
+  );
+  const submission = await f.ok(
+    "POST",
+    "/sync/submissions",
+    f.enzo.token,
+    f.operation(),
+  );
+  await f.ok(
+    "POST",
+    "/submissions/" + submission.submission.id + "/evaluations",
+    f.maria.token,
+    f.evaluation(),
+  );
+  assert.equal((await f.ok("GET", "/me/avatar", f.enzo.token)).xp, 125);
+  await f.db.migrate();
+  assert.equal((await f.ok("GET", "/me/avatar", f.enzo.token)).xp, 125);
+});
+
+test("atualizações: revisão só muda para dados autorizados e dispensa cache", async (t) => {
+  const f = await fixture(t);
+  assert.equal((await f.send("GET", "/updates")).statusCode, 401);
+  const revision = async (token: string) =>
+    (await f.ok("GET", "/updates", token)).revision;
+  const start = await revision(f.enzo.token),
+    teacher = await revision(f.maria.token),
+    outsider = await revision(f.external.token);
+  assert.equal(await revision(f.enzo.token), start);
+  assert.equal(
+    (await f.send("GET", "/updates", f.enzo.token)).headers["cache-control"],
+    "no-store",
+  );
+  await f.ok(
+    "POST",
+    "/classrooms/" + f.classroom.id + "/missions",
+    f.maria.token,
+    f.content,
+    201,
+  );
+  assert.equal(await revision(f.enzo.token), start); // Teacher-only draft is not observable.
+  assert.notEqual(await revision(f.maria.token), teacher);
+  const lucas = await revision(f.lucas.token);
+  await f.ok("POST", "/sync/submissions", f.enzo.token, f.operation());
+  assert.notEqual(await revision(f.enzo.token), start);
+  assert.equal(await revision(f.lucas.token), lucas); // Another group's work is not observable.
+  assert.equal(await revision(f.external.token), outsider);
+  const previous = await revision(f.enzo.token);
+  await f.db.run("UPDATE classrooms SET paused=1 WHERE id=$1", f.classroom.id);
+  assert.notEqual(await revision(f.enzo.token), previous);
+});
+
+test("SSE recebe mudanças confirmadas, isola grupos e encerra sessão revogada", async (t) => {
+  const f = await fixture(t);
+  const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+  const abort = new AbortController();
+  t.after(() => abort.abort());
+  const response = await fetch(address + "/api/v1/events", {
+    headers: { authorization: "Bearer " + f.enzo.token },
+    signal: abort.signal,
+  });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type")!, /text\/event-stream/);
+  assert.equal(response.headers.get("x-accel-buffering"), "no");
+  const frames: string[] = [];
+  let finished = false;
+  const reader = response.body!.getReader();
+  const pump = (async () => {
+    let buffer = "";
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const r = await reader.read();
+        if (r.done) break;
+        buffer += decoder.decode(r.value, { stream: true });
+        let end;
+        while ((end = buffer.indexOf("\n\n")) >= 0) {
+          frames.push(buffer.slice(0, end));
+          buffer = buffer.slice(end + 2);
+        }
+      }
+    } finally {
+      finished = true;
+    }
+  })();
+  const wait = async (check: () => boolean) => {
+    const until = Date.now() + 2500;
+    while (!check() && Date.now() < until)
+      await new Promise((r) => setTimeout(r, 10));
+    assert.ok(check(), frames.join(" | "));
+  };
+  await wait(() => frames.some((s) => s.startsWith("event: update")));
+  const initial = frames.filter((s) => s.startsWith("event: update")).length;
+  // A rolled-back write must never produce a notification.
+  let notifications = 0;
+  const unlisten = await f.db.listenChanges(
+    () => notifications++,
+    () => {},
+  );
+  await assert.rejects(
+    f.db.transaction(async () => {
+      await f.db.run(
+        "UPDATE classrooms SET paused=1 WHERE id=$1",
+        f.classroom.id,
+      );
+      throw Error("rollback");
+    }),
+  );
+  assert.equal(notifications, 0);
+  await unlisten();
+  await f.ok(
+    "POST",
+    "/groups/" + f.otherGroup.id + "/help",
+    f.lucas.token,
+    { message: "Dúvida privada de outra equipe" },
+    201,
+  );
+  await f.ok(
+    "POST",
+    "/classrooms/" + f.classroom.id + "/missions",
+    f.maria.token,
+    f.content,
+    201,
+  );
+  await f.db.run("UPDATE classrooms SET paused=1 WHERE id=$1", f.classroom.id);
+  await wait(
+    () => frames.filter((s) => s.startsWith("event: update")).length > initial,
+  );
+  assert.equal(
+    frames.filter((s) => s.startsWith("event: update")).length,
+    initial + 1,
+  );
+  assert.ok(!frames.join("").includes("Dúvida privada"));
+  assert.equal((await f.send("POST", "/auth/logout", f.enzo.token)).statusCode, 204);
+  await wait(() => finished);
+  await pump;
+  assert.ok(frames.some((s) => s.startsWith("event: reauthenticate")));
+  assert.equal(
+    (
+      await fetch(address + "/api/v1/events", {
+        headers: { authorization: "Bearer " + f.enzo.token },
+      })
+    ).status,
+    401,
+  );
+});

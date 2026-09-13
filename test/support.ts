@@ -6,6 +6,7 @@ export async function testStore(path?: string) {
   const db = new PGlite(path);
   let tail = Promise.resolve();
   const driver: DatabaseDriver = {
+    listen: (changed) => db.listen("educaxp_changes", changed),
     async connect() {
       const previous = tail;
       let release!: () => void;

@@ -70,6 +70,30 @@ export const migrations = [
    CREATE INDEX idx_groups_class ON groups(classroom_id);
    CREATE INDEX idx_help_group ON help_requests(group_id);
   `,
+  `CREATE TABLE focus_records (
+    mission_id TEXT NOT NULL REFERENCES missions(id), group_id TEXT NOT NULL REFERENCES groups(id),
+    author_id TEXT NOT NULL REFERENCES users(id), goal TEXT NOT NULL, strategy TEXT NOT NULL,
+    reflection TEXT NOT NULL, channel TEXT NOT NULL CHECK(channel IN ('digital','teacher_mediated')),
+    created_at TEXT NOT NULL, PRIMARY KEY(mission_id,group_id)
+  );
+  CREATE TABLE focus_rewards (
+    user_id TEXT NOT NULL REFERENCES users(id), mission_id TEXT NOT NULL REFERENCES missions(id),
+    xp INTEGER NOT NULL CHECK(xp=25), created_at TEXT NOT NULL, PRIMARY KEY(user_id,mission_id)
+  );`,
+  `CREATE FUNCTION educaxp_notify_change() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN PERFORM pg_notify('educaxp_changes', ''); RETURN NULL; END; $body$;
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON users FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON sessions FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON classrooms FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON memberships FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON groups FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON group_members FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON missions FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON submissions FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON evaluations FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON help_requests FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON rewards FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON focus_records FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();
+CREATE TRIGGER educaxp_change AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON focus_rewards FOR EACH STATEMENT EXECUTE FUNCTION educaxp_notify_change();`,
 ];
 export const dataTables = [
   "schools",

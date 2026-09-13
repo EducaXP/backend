@@ -22,6 +22,8 @@ import { object, text } from "./schemas.js";
 import { classroomRoutes } from "./routes/classrooms.js";
 import { missionRoutes } from "./routes/missions.js";
 import { learningRoutes } from "./routes/learning.js";
+import { focusRoutes } from "./routes/focus.js";
+import { updateRoutes } from "./routes/updates.js";
 import { assistantRoutes } from "./routes/assistant.js";
 import type { PlanningAgent } from "./planning-agent.js";
 export interface AppOptions {
@@ -48,7 +50,8 @@ export async function buildApp(options: AppOptions = {}) {
   }).withTypeProvider<TypeBoxTypeProvider>();
   app.addHook("onClose", async () => await db.close());
   app.addHook("onSend", async (_req, reply) => {
-    reply.header("Cache-Control", "no-store");
+    if (!reply.hasHeader("Cache-Control"))
+      reply.header("Cache-Control", "no-store");
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("Referrer-Policy", "no-referrer");
   });
@@ -262,6 +265,8 @@ export async function buildApp(options: AppOptions = {}) {
       classroomRoutes(secured, db);
       missionRoutes(secured, db);
       learningRoutes(secured, db);
+      focusRoutes(secured, db);
+      await updateRoutes(secured, db);
       assistantRoutes(secured, db, options.planningAgent);
     },
     { prefix: "/api/v1" },
